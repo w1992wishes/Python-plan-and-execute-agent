@@ -1,0 +1,4 @@
+langgraph==0.6.6
+langchain-community==0.3.27
+openai==1.101.0
+langchain_openai==0.3.31

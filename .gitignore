@@ -1,0 +1,111 @@
+# 操作系统生成文件
+.DS_Store                  # macOS
+Thumbs.db                  # Windows
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Icon?
+._*
+$RECYCLE.BIN/
+
+# 编辑器/IDE 配置文件
+.idea/                     # IntelliJ IDEA
+.vscode/                   # VS Code
+*.sublime-*                # Sublime Text
+*.swp                      # Vim 交换文件
+*.swo                      # Vim 交换文件
+*.nvim                    # Neovim 相关
+.历史记录/                  # 部分中文编辑器
+
+# 语言相关产物
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+.env
+.venv
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.next/
+out/
+build
+.vercel
+dist
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+target/
+out/
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# 日志和临时文件
+*.log
+*.tmp
+*.temp
+logs/
+tmp/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+*.ldb
+
+# 压缩包
+*.zip
+*.tar.gz
+*.tar.bz2
+*.rar
+*.7z
+
+# 环境配置文件（含敏感信息）
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 其他常见忽略项
+.DS_Store
+*.pid
+*.seed
+.DS_Store
+.coverage
+.nyc_output/
+coverage/
+*.log
