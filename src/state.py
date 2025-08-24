@@ -67,7 +67,7 @@ class AgentState(TypedDict):
     # 输入输出
     input: str
     output: Optional[str]
-    context: Dict[str, Any] = None  # 上下文信息（可选）
+    context: Dict[str, Any]  # 上下文信息（可选）
 
     # 对话历史
     messages: Annotated[List[BaseMessage], operator.add]  # 消息列表（支持累加）
@@ -83,12 +83,13 @@ class AgentState(TypedDict):
     # 执行状态
     has_error: bool  # 是否发生错误
     error_message: Optional[str]   # 错误信息（可选）
-    step_results: Dict[str, Any]  # 步骤执行结果（ID→结果）
     plan_failed: Optional[bool]  # 计划是否失败（可选）
 
     # 执行进度
     current_step: int = 0  # 当前执行到第几步
     max_steps: int = 10  # 最大步骤数
+
+    evaluation: Optional[Dict[str, Any]]  # 结果评估信息（可选）
 
     # 重规划相关
     need_replan: Optional[bool]  # 是否需要重规划

@@ -33,3 +33,5 @@ class Settings:
 
     # 重规划限制
     MAX_AGENT_ITERATIONS = 20  # 智能体重规划最大次数
+
+    MAX_REPLAN_COUNT = 2

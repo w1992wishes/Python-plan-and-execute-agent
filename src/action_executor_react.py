@@ -226,8 +226,7 @@ def action_executor_node(state: AgentState) -> dict:
     # 构建带状态和依赖的任务清单
     plan_steps_text = "任务清单：\n"
     for i, step in enumerate(current_plan.steps):
-        # 步骤状态标记（完成✅ / 未开始⏳）
-        status = "✅" if step.id in state.get("step_results", {}) else "⏳"
+        status = "⏳"
         plan_steps_text += f"{i + 1}. [{status}] {step.description}"
 
         # 附加工具信息
@@ -257,7 +256,6 @@ def action_executor_node(state: AgentState) -> dict:
 
         return {
             "output": result,
-            "agent_executor": agent,
             "messages": messages
         }
 
@@ -265,7 +263,6 @@ def action_executor_node(state: AgentState) -> dict:
         # 异常捕获：记录栈信息 + 返回重规划标记
         logger.error(f"❌ 智能体执行失败：{str(e)}", exc_info=True)
         return {
-            "step_results": state.get("step_results", {}),  # 保留已有步骤结果
             "messages": [
                 AIMessage(
                     content=f"智能体执行失败：{str(e)}",

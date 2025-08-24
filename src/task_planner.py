@@ -1,6 +1,5 @@
 from state import AgentState, Plan, PlanStep, PlanType
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-import json
 import re
 import time
 from logger_config import logger
@@ -70,61 +69,6 @@ def _parse_plan(query: str, plan_text: str, available_tools: list) -> Plan:
     except Exception as e:
         logger.error(f"计划解析失败: {e}", exc_info=True)
         raise
-
-
-def _create_planning_prompt(query: str, tools_str: str, similar_plans: list, context: dict = None) -> str:
-    """构建任务规划的Prompt（包含格式约束）"""
-    context_str = json.dumps(context, ensure_ascii=False) if context else "无上下文信息"
-
-    # 相似计划格式化
-    similar_plans_str = "无相似历史计划"
-    if similar_plans:
-        similar_plans_str = "\n".join([
-            f"- 计划ID: {p.id}, 目标: {p.goal}, 类型: {p.plan_type.value}"
-            for p in similar_plans[:3]  # 最多展示3条
-        ])
-
-    return f"""### 用户查询
-{query}
-
-### 可用工具
-{tools_str}
-
-### 上下文信息
-{context_str}
-
-### 相似历史计划
-{similar_plans_str}
-
-### 任务要求
-1. 生成**分步执行计划**，明确每个步骤的依赖关系  
-2. 为步骤选择**可用工具**（需在工具列表中），工具入参支持引用前置步骤结果（如 `step_1_data`）  
-3. 填写**输入模板**（支持变量插值）、**预期输出**，并评估**步骤置信度**（0.0-1.0）  
-4. 整体计划需标注**类型**（sequential/parallel）、**预计耗时**（秒）和**整体置信度**  
-
-### 输出格式（必须严格遵循JSON）
-{{
-  "id": "唯一计划ID",
-  "query": "用户原始查询",
-  "goal": "计划目标",
-  "plan_type": "sequential/parallel",
-  "steps": [
-    {{
-      "id": "step_1",
-      "description": "步骤描述",
-      "tool": "工具名称",
-      "tool_args": "工具入参（支持引用前置步骤）",
-      "input_template": "输入模板（如 {{city}} 的天气）",
-      "dependencies": ["step_1"],  # 依赖的步骤ID列表
-      "expected_output": "预期输出描述",
-      "confidence": 0.8
-    }}
-  ],
-  "estimated_duration": 60,
-  "confidence": 0.8,
-  "created_at": 1690000000  # 时间戳
-}}"""
-
 
 class PlanGenerator:
     """计划生成器（封装LLM调用和计划解析）"""
@@ -230,8 +174,7 @@ def task_planner_node(state: AgentState) -> dict:
         return {
             "current_plan": default_plan,
             "plan_history": state.get("plan_history", []) + [default_plan],
-            "need_replan": True,
             "messages": [
-                AIMessage(content=f"计划生成异常（原因：{str(e)}），已启用应急计划")
+                AIMessage(content=f"计划生成异常（原因：{str(e)}），启用应急计划")
             ]
         }
