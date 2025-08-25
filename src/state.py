@@ -1,121 +1,147 @@
-from typing import TypedDict, List, Literal, Optional, Dict, Any, Annotated
-import operator
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Union
+import time
 
 
-# ========== Plan 相关定义 ==========
-class PlanType(Enum):
-    """智能体支持的计划类型"""
-    SEQUENTIAL = "sequential"  # 顺序执行步骤
-    PARALLEL = "parallel"  # 并行执行（若支持）
-    CONDITIONAL = "conditional"  # 条件执行
-    ITERATIVE = "iterative"  # 迭代执行直到条件满足
+class PlanType(str, Enum):
+    """计划类型枚举（顺序/并行）"""
+    SEQUENTIAL = "sequential"  # 顺序执行（当前默认支持）
+    PARALLEL = "parallel"      # 并行执行（预留扩展）
 
 
 @dataclass
 class PlanStep:
-    """计划中的单个步骤"""
-    id: str  # 步骤唯一ID
-    description: str  # 步骤描述
-    tool: str  # 调用的工具名称
-    tool_args: Dict[str, Any] # 工具入参
-    input_template: str  # 输入模板（可选）
-    dependencies: List[str]  # 依赖的步骤ID列表
-    conditions: Optional[Dict[str, Any]] = None  # 执行条件（可选）
-    expected_output: Optional[str] = None  # 预期输出描述（可选）
-    confidence: float = 0.5  # 步骤置信度
-    metadata: Dict[str, Any] = None  # 元数据（可选）
-
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
+    """单个执行步骤模型（与ReAct执行器参数严格对齐）"""
+    id: str  # 步骤唯一ID，格式：step_1、step_2_123（序号+随机数）
+    description: str  # 步骤操作描述（如：调用tavily_search查询2024澳网冠军）
+    tool: str = ""  # 关联工具名称（必须在settings.ENABLED_TOOLS中）
+    tool_args: Dict[str, Any] = field(default_factory=dict)  # ReAct兼容的JSON参数
+    input_template: str = ""  # 自然语言输入模板（如："查询{query}的{指标}"）
+    dependencies: List[str] = field(default_factory=list)  # 依赖步骤ID列表
+    expected_output: str = ""  # 预期输出描述（如："返回2024澳网男单冠军姓名"）
+    confidence: float = 0.7  # 步骤可行性置信度（0.0-1.0）
+    status: str = "pending"  # 步骤状态：pending（待执行）、completed（已完成）、failed（失败）
 
 
 @dataclass
 class Plan:
-    """完整的执行计划"""
-    id: str  # 计划唯一ID
-    query: str  # 原始用户查询
-    goal: str  # 计划目标
-    plan_type: PlanType  # 计划类型（顺序/并行等）
-    steps: List[PlanStep]  # 步骤列表
-    estimated_duration: float = 0.0  # 预计执行时间（可选）
-    confidence: float = 0.5  # 计划整体置信度
-    metadata: Dict[str, Any] = None  # 元数据（可选）
-    created_at: float = 0.0  # 创建时间戳（可选）
-
-    def get_executable_steps(self, completed_steps: List[str]) -> List[PlanStep]:
-        """获取当前可执行的步骤（满足依赖条件）"""
-        executable = []
-        for step in self.steps:
-            if step.id not in completed_steps:
-                # 检查所有依赖是否已完成
-                if all(dep in completed_steps for dep in step.dependencies):
-                    executable.append(step)
-        return executable
-
-    def is_complete(self, completed_steps: List[str]) -> bool:
-        """判断计划是否已完成（所有步骤都执行完毕）"""
-        return all(step.id in completed_steps for step in self.steps)
-
-
-# ========== Agent 状态定义 ==========
-class AgentState(TypedDict):
-    """智能体运行时状态（通过 TypedDict 强约束结构）"""
-    # 输入输出
-    input: str
-    output: Optional[str]
-    context: Dict[str, Any]  # 上下文信息（可选）
-
-    # 对话历史
-    messages: Annotated[List[BaseMessage], operator.add]  # 消息列表（支持累加）
-
-    # 意图分类结果
-    intent_type: str  # 英文意图类型（如 SIMPLE_QUERY）
-    chinese_label: str  # 中文意图标签（如 "指标简单查数"）
-
-    # 计划相关
-    current_plan: Optional[Plan]  # 当前执行的计划
-    plan_history: Annotated[List[Plan], operator.add]  # 历史计划列表（支持累加）
-
-    # 执行状态
-    has_error: bool  # 是否发生错误
-    error_message: Optional[str]   # 错误信息（可选）
-    plan_failed: Optional[bool]  # 计划是否失败（可选）
-
-    # 执行进度
-    current_step: int = 0  # 当前执行到第几步
-    max_steps: int = 10  # 最大步骤数
-
-    evaluation: Optional[Dict[str, Any]]  # 结果评估信息（可选）
-
-    # 重规划相关
-    need_replan: Optional[bool]  # 是否需要重规划
-    replan_count: int # 重规划次数
-    replan_limit: Optional[bool]  # 重规划是否达上限
-    replan_analysis: Dict[str, Any]  # 重规划分析结果（可选）
-
-
-def create_initial_state(input_text: str, max_steps: int = 10) -> AgentState:
-    """创建智能体初始状态"""
-    return AgentState(
-        input=input_text,
-        output=None,
-        current_step=0,
-        max_steps=max_steps,
-        has_error=False,
-        error_message=None,
-        step_results={},
-        plan_failed=None,
-        messages=[],
-        intent_type="",
-        chinese_label="",
-        current_plan=None,
-        plan_history=[],
-        need_replan=False,
-        replan_count=0,
-        replan_limit=False,
-        replan_analysis=None,
+    """完整任务计划模型（关联多个步骤）"""
+    id: str  # 计划唯一ID，格式：plan_1712345678（时间戳）
+    query: str  # 用户原始查询（与AgentState.input一致）
+    goal: str  # 计划总目标（如："获取2024澳网男单冠军及其家乡"）
+    plan_type: PlanType  # 计划类型（当前仅支持SEQUENTIAL）
+    steps: List[PlanStep]  # 步骤列表（按执行顺序排列）
+    estimated_duration: float = 60.0  # 预计总耗时（秒）
+    confidence: float = 0.7  # 整体计划置信度（0.0-1.0）
+    metadata: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "generated_by": "llm_planner",
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "intent_type": "SIMPLE_QUERY"  # 关联意图类型
+        }
     )
+    created_at: float = field(default_factory=time.time)  # 生成时间戳（秒）
+    updated_at: float = field(default_factory=time.time)  # 最后更新时间戳
+
+
+@dataclass
+class AgentState:
+    """
+    终极版Agent状态：纯类对象（非字典子类）
+    所有属性通过实例.属性访问，彻底杜绝字典与类的混淆
+    """
+    # ------------------------------
+    # 核心必填属性（带默认值，无需手动初始化）
+    # ------------------------------
+    input: str = ""  # 用户输入的原始查询（核心字段）
+    intent_type: str = "SIMPLE_QUERY"  # 意图类型（英文，如SIMPLE_QUERY）
+    intent_info: Dict[str, Any] = field(default_factory=dict)  # 完整意图结果（含中文标签、置信度）
+    current_plan: Optional[Plan] = None  # 当前生效的计划（Plan对象或None）
+    plan_history: List[Plan] = field(default_factory=list)  # 历史计划列表
+    executed_steps: List[Dict[str, Any]] = field(default_factory=list)  # 已执行步骤记录
+    need_replan: bool = False  # 是否需要重规划（布尔值）
+    task_completed: bool = False  # 任务是否完成（布尔值）
+    last_error: str = ""  # 上一次执行错误信息
+    need_attention: bool = False  # 是否需要人工关注
+    messages: List[Any] = field(default_factory=list)  # 交互消息列表（LangChain Message对象）
+    context: Dict[str, Any] = field(default_factory=dict)  # 额外上下文（如用户历史对话）
+
+    # ------------------------------
+    # 属性操作方法（封装逻辑，避免直接修改）
+    # ------------------------------
+    def set_input(self, value: str) -> None:
+        """设置用户查询（自动校验类型和去重）"""
+        if not isinstance(value, str):
+            raise TypeError(f"input必须是字符串类型，当前：{type(value).__name__}")
+        self.input = value.strip()  # 自动去除前后空格
+
+    def set_intent_type(self, intent_name: str) -> None:
+        """设置意图类型（仅允许指定枚举值）"""
+        valid_intents = ["SIMPLE_QUERY", "COMPARISON", "ROOT_CAUSE_ANALYSIS"]
+        if intent_name not in valid_intents:
+            raise ValueError(f"intent_type必须是{valid_intents}之一，当前：{intent_name}")
+        self.intent_type = intent_name
+        # 同步更新当前计划的意图类型（如果有计划）
+        if self.current_plan:
+            self.current_plan.metadata["intent_type"] = intent_name
+
+    def add_executed_step(self, step: PlanStep, result: str) -> None:
+        """添加已执行步骤记录（自动格式化，避免手动构造字典）"""
+        if not isinstance(step, PlanStep):
+            raise TypeError(f"step必须是PlanStep对象，当前：{type(step).__name__}")
+        self.executed_steps.append({
+            "step_id": step.id,
+            "description": step.description,
+            "tool_used": step.tool,
+            "result": result,
+            "status": "completed" if "error" not in result.lower() else "failed",
+            "executed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        # 执行后自动标记需要重规划
+        self.need_replan = True
+
+    def add_message(self, message: Any) -> None:
+        """添加交互消息（确保是LangChain Message对象）"""
+        from langchain_core.messages import BaseMessage
+        if isinstance(message, BaseMessage) or hasattr(message, "content"):
+            self.messages.append(message)
+        else:
+            raise TypeError(f"message必须是LangChain Message对象，当前：{type(message).__name__}")
+
+    def set_current_plan(self, plan: Plan) -> None:
+        """设置当前计划（自动更新历史和时间戳）"""
+        if not isinstance(plan, Plan):
+            raise TypeError(f"plan必须是Plan对象，当前：{type(plan).__name__}")
+        # 添加到历史计划
+        if self.current_plan:
+            self.plan_history.append(self.current_plan)
+        # 设置新计划
+        self.current_plan = plan
+        plan.updated_at = time.time()  # 更新计划时间戳
+
+    # ------------------------------
+    # 辅助方法
+    # ------------------------------
+    def _get_task_duration(self) -> float:
+        """计算任务总耗时（从第一个计划生成到现在）"""
+        if not self.plan_history and not self.current_plan:
+            return 0.0
+        first_plan = self.plan_history[0] if self.plan_history else self.current_plan
+        return time.time() - first_plan.created_at
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典（用于序列化或日志）"""
+        return {
+            "input": self.input,
+            "intent_type": self.intent_type,
+            "intent_info": self.intent_info,
+            "current_plan_id": self.current_plan.id if self.current_plan else None,
+            "plan_history_count": len(self.plan_history),
+            "executed_steps_count": len(self.executed_steps),
+            "need_replan": self.need_replan,
+            "task_completed": self.task_completed,
+            "last_error": self.last_error,
+            "message_count": len(self.messages),
+            "task_duration": self._get_task_duration()
+        }

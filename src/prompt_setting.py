@@ -1,109 +1,117 @@
 import json
+from typing import Dict, Any
+
 
 def get_planning_system_prompt(intent_type: str = "SIMPLE_QUERY") -> str:
-    """根据不同意图类型获取对应的系统提示词（定义角色和核心能力）"""
-    base_system = """你是一个高级任务规划专家，擅长根据用户需求设计精准高效的执行计划。
+    """根据意图类型生成规划系统提示词（适配ReAct执行器）"""
+    base_system = """你是专业任务规划专家，需根据用户查询生成结构化执行计划。
 
 核心能力：
-- 理解复杂查询并拆解为可执行步骤
-- 合理选择工具并规划步骤依赖关系
-- 预测执行风险并设计应对方案
-- 参考历史经验优化计划结构
+- 拆解查询为可执行步骤，明确步骤依赖关系
+- 从可用工具中选择合适工具，参数需完整
+- 客观评估步骤可行性（0.0-1.0置信度）
 
 基础规范：
-1. 所有计划必须符合可用工具的能力范围
-2. 步骤设计需考虑逻辑连贯性
-3. 输出必须是严格的JSON格式，不包含任何解释性文本
-4. 置信度评估需客观反映步骤可行性"""
+1. 输出必须是纯JSON，无任何解释性文本
+2. 工具必须从提供的"可用工具"中选择
+3. 步骤需包含明确的输入输出描述
+4. 支持引用前置步骤结果（格式：{step_id_result}，需与ReAct执行器兼容）
+"""
 
-    if intent_type == "SIMPLE_QUERY":
-        return base_system + """
+    intent_specs = {
+        "SIMPLE_QUERY": """
 专项要求：
-- 计划应聚焦于单一查询目标，避免冗余步骤
-- 优先选择直接获取数据的工具
-- 确保查询参数完整（指标、时间、维度等）"""
-
-    elif intent_type == "COMPARISON":
-        return base_system + """
+- 聚焦单一查询目标，步骤不超过3个
+- 优先选择直接获取数据的工具（如搜索、数据库查询）
+- 确保查询参数完整（时间、维度、过滤条件等）
+- 工具参数需符合ReAct执行器格式（键值对结构，支持变量引用）
+""",
+        "COMPARISON": """
 专项要求：
-- 计划需包含对比数据获取和差异分析两个核心阶段
-- 对比维度应明确且与用户需求高度相关
-- 分析步骤需包含明确的评估标准"""
-
-    elif intent_type == "ROOT_CAUSE_ANALYSIS":
-        return base_system + """
+- 包含"数据获取→对比分析"两阶段步骤
+- 对比维度需与查询强相关（如数值、趋势、特征）
+- 分析步骤需明确评估标准（如差异率、优先级）
+- 工具参数需使用ReAct执行器兼容的JSON格式
+""",
+        "ROOT_CAUSE_ANALYSIS": """
 专项要求：
-- 计划需包含数据获取→数据风险分析两阶段
-- 当分析存在不确定性时，必须生成下级机构/维度的排查步骤
-- 根因定位步骤需设计因果关系验证机制"""
+- 包含"数据采集→异常定位→根因验证"三阶段
+- 当结果存在不确定性时，需生成排查子步骤
+- 根因步骤需包含因果关系验证逻辑
+- 所有工具调用参数必须可被ReAct执行器直接解析
+"""
+    }
 
-    return base_system
+    return base_system + intent_specs.get(intent_type, intent_specs["SIMPLE_QUERY"])
 
 
-def create_planning_prompt(query: str, tools_str: str, similar_plans: list, context: dict = None) -> str:
-    """构建用户提示词（提供具体信息和格式约束）"""
-    context_str = json.dumps(context, ensure_ascii=False) if context else "无上下文信息"
+def create_planning_prompt(
+        query: str,
+        tools_str: str,
+        similar_plans_str: str,
+        context: Dict[str, Any] = None
+) -> str:
+    """构建规划阶段的用户提示词（强化工具参数与ReAct执行器对齐）"""
+    context_str = json.dumps(context, ensure_ascii=False, indent=2) if context else "{}"
 
-    # 相似计划格式化
-    similar_plans_str = "无相似历史计划"
-    if similar_plans:
-        similar_plans_str = "\n".join([
-            f"- 计划ID: {p.id}, 目标: {p.goal}, 类型: {p.plan_type.value}"
-            for p in similar_plans[:3]  # 最多展示3条
-        ])
-
-    return f"""### 任务输入信息
+    return f"""### 任务信息
 - 用户查询: {query}
-- 可用工具: {tools_str}
-- 上下文信息: {context_str}
-- 相似历史计划: {similar_plans_str}
+- 可用工具: {tools_str}- 上下文: {context_str}- 相似历史计划: {similar_plans_str}
 
-### 计划构建要求
-1. 生成分步执行计划，明确步骤间依赖关系
-2. 工具必须从可用工具列表中选择，入参支持引用前置步骤结果（如 `step_1_data`）
-3. 每个步骤需包含:
-   - 清晰的描述和工具选择
-   - 完整的输入模板（支持变量插值）
-   - 明确的预期输出和置信度（0.0-1.0）
-4. 整体计划需标注:
-   - 类型（sequential/parallel）
-   - 预计耗时（秒）
-   - 整体置信度（0.0-1.0）
-
-### 输出格式（必须严格遵循，不可添加额外内容）
-{{
-  "id": "唯一计划ID",
-  "query": "用户原始查询",
-  "goal": "计划目标",
-  "plan_type": "sequential/parallel",
+### 计划格式要求（必须严格遵守，适配ReAct执行器）
+输出JSON结构如下（字段不可增减，类型需正确）：{{
+  "id": "plan_1712345678",  // 格式：plan_时间戳
+  "query": "{query}",       // 原样保留用户查询
+  "goal": "明确的计划目标",  // 与查询意图一致
+  "plan_type": "sequential", // 目前仅支持顺序执行
   "steps": [
     {{
-      "id": "step_1",
-      "description": "步骤描述",
-      "tool": "工具名称",
-      "tool_args": "工具入参（支持引用前置步骤）",
-      "input_template": "输入模板（如 查询深圳本月的客户量）",
-      "dependencies": ["step_1"],  # 依赖的步骤ID列表
-      "expected_output": "预期输出描述",
-      "confidence": 0.8
+      "id": "step_1",       // 格式：step_序号
+      "description": "步骤具体操作描述（需符合ReAct思考逻辑）",
+      "tool": "工具名称",    // 必须在可用工具列表中，将被ReAct执行器直接调用
+      "tool_args": {{        // 工具参数（必须为JSON对象，ReAct执行器可直接解析）
+        "param1": "{query}",
+        "param2": "{{step_1_result}}"  // 引用前置步骤结果（ReAct执行器兼容格式）
+      }},
+      "input_template": "自然语言输入模板（供ReAct执行器生成工具调用指令）",
+      "dependencies": [],   // 依赖的步骤ID列表（无依赖留空）
+      "expected_output": "预期输出的结构化描述（需为ReAct执行器可返回的格式）",
+      "confidence": 0.8     // 0.0-1.0的浮点数
     }}
   ],
-  "estimated_duration": 60,
-  "confidence": 0.8,
-  "created_at": 1690000000  # 时间戳
-}}"""
+  "estimated_duration": 60,  // 预计总耗时（秒）
+  "confidence": 0.8,         // 整体计划置信度
+  "created_at": 1712345678   // 生成时间戳（整数）
+}}
+### 关键适配说明（必须遵守）
+1. `tool_args` 必须是标准JSON对象（键值对），确保ReAct执行器可直接作为工具输入
+2. 引用前置步骤结果时，使用 `{{step_id_result}}` 格式，与ReAct的变量解析逻辑一致
+3. `input_template` 需包含自然语言指令，指导ReAct执行器如何使用工具参数
+4. 输出仅包含上述JSON，无其他内容，避免干扰ReAct执行器的解析逻辑
+"""
 
 
 def get_replanning_system_prompt(intent_type: str = "SIMPLE_QUERY") -> str:
-    """获取重规划系统的系统提示"""
-    return f"""你是一个高级任务规划专家。你的任务是根据用户查询、可用工具和上下文信息，创建一个结构化的执行计划。
+    """重规划系统提示词（适配ReAct执行器的工具调用逻辑）"""
+    base_replan = """你是专业任务重规划专家，需根据执行进度优化原有计划，确保与ReAct执行器兼容。
 
-重要指南：
-1. 仔细分析用户查询，确定真正的意图和需求
-2. 根据意图选择合适的工具和执行策略
-3. 创建清晰、可执行的步骤序列，考虑步骤间的依赖关系
-4. 为每个步骤指定合适的工具、输入模板和预期输出
-5. 评估计划的置信度和预计执行时间
-6. 如果查询不明确，创建一个初步计划并标记需要澄清
+核心能力：
+- 保留未执行步骤，删除已执行步骤
+- 基于ReAct执行器返回的结果调整步骤参数和依赖关系
+- 处理执行错误（如更换工具、修正参数格式以适配ReAct执行器）
 
-请严格按照指定的JSON格式返回计划，不要包含任何额外文本。"""
+重规划规范：
+1. 输出格式必须与初始计划完全一致（字段、类型、约束相同）
+2. 步骤ID不可与已执行步骤重复
+3. 需引用已执行步骤结果（格式：{step_id_result}，与ReAct执行器兼容）
+4. 若所有步骤完成，返回空steps列表并在goal标记"任务完成"
+5. 调整后的工具参数必须符合ReAct执行器的输入要求（标准JSON对象）
+"""
+
+    intent_specs = {
+        "SIMPLE_QUERY": "专项要求：优先修正参数格式错误，确保ReAct执行器可解析",
+        "COMPARISON": "专项要求：确保对比维度一致性，补充差异分析细节，工具参数需适配ReAct",
+        "ROOT_CAUSE_ANALYSIS": "专项要求：针对错误步骤生成排查子步骤，强化根因验证，参数格式兼容ReAct"
+    }
+
+    return base_replan + intent_specs.get(intent_type, intent_specs["SIMPLE_QUERY"])

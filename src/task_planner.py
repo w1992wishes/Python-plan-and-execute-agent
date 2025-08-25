@@ -1,180 +1,103 @@
-from state import AgentState, Plan, PlanStep, PlanType
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-import re
-import time
+from state import AgentState, Plan
+from langchain_core.messages import AIMessage
 from logger_config import logger
 from prompt_setting import get_planning_system_prompt, create_planning_prompt
-from settings import Settings
-from agent_tools import get_all_tools, get_tools_map
-from langchain_openai import ChatOpenAI
-from message_parser import parse_messages
-from langchain.tools.render import render_text_description
+from plan_utils import BasePlanGenerator, validate_plan_for_react
+import time
 
 
-def get_similar_plans(query: str) -> list:
-    """获取与查询相似的历史计划"""
-    logger.debug(f"查找与 '{query}' 相似的计划")
-    return []  # 实际项目中应连接记忆系统（如向量数据库）
+class TaskPlanGenerator(BasePlanGenerator):
+    """初始计划生成器（适配ReAct执行器）"""
 
+    def generate_initial_plan(self, state: AgentState) -> Plan:
+        """根据Agent状态生成初始计划（整合意图、查询、上下文）"""
+        # 1. 提取状态中的核心信息（使用纯属性访问）
+        query = state.input
+        intent_type = state.intent_type
+        context = state.context  # 额外上下文（如用户历史对话）
 
-from json_util import extract_json_safely
+        # 2. 获取相似历史计划（供LLM参考，提升计划质量）
+        similar_plans = self._format_similar_plans(query)
 
-def _parse_plan(query: str, plan_text: str, available_tools: list) -> Plan:
-    """解析LLM返回的计划文本"""
-    try:
-        # 提取JSON片段（假设LLM按格式返回）
-        json_part = re.split(r"</think>", plan_text)[-1].strip()
-        plan_data = extract_json_safely(json_part)
-
-        # 验证核心字段
-        required_fields = ["id", "query", "goal", "plan_type", "steps"]
-        for field in required_fields:
-            if field not in plan_data:
-                raise ValueError(f"计划数据缺少必要字段: {field}")
-
-        # 构建步骤对象
-        steps = []
-        for i, step_data in enumerate(plan_data["steps"]):
-            step = PlanStep(
-                id=step_data.get("id", f"step_{i + 1}"),
-                description=step_data.get("description", ""),
-                tool=step_data.get("tool", ""),
-                tool_args=step_data.get("tool_args", {}),
-                input_template=step_data.get("input_template", ""),
-                dependencies=step_data.get("dependencies", []),
-                expected_output=step_data.get("expected_output", ""),
-                confidence=step_data.get("confidence", 0.7)
-            )
-
-            # 过滤不可用工具
-            if step.tool and step.tool not in available_tools:
-                logger.warning(f"计划中存在不可用工具: {step.tool}，已忽略")
-                step.tool = ""  # 清空无效工具
-
-            steps.append(step)
-
-        # 构建完整计划对象
-        return Plan(
-            id=plan_data.get("id", f"plan_{int(time.time())}"),
-            query=plan_data.get("query", query),
-            goal=plan_data.get("goal", "任务规划"),
-            plan_type=PlanType(plan_data.get("plan_type", "sequential")),
-            steps=steps,
-            estimated_duration=plan_data.get("estimated_duration", 60.0),
-            confidence=plan_data.get("confidence", 0.7),
-            metadata=plan_data.get("metadata", {"source": "llm"}),
-            created_at=plan_data.get("created_at", time.time())
-        )
-
-    except Exception as e:
-        logger.error(f"计划解析失败: {e}", exc_info=True)
-        raise
-
-class PlanGenerator:
-    """计划生成器（封装LLM调用和计划解析）"""
-
-    def __init__(self):
-        self.tools = get_all_tools()  # 获取所有可用工具
-        self.tools_str = render_text_description(self.tools)  # 渲染工具描述
-        self.tools_map = get_tools_map()  # 工具映射表
-
-        # 初始化LLM
-        self.model = ChatOpenAI(
-            model=Settings.LLM_MODEL,
-            temperature=Settings.TEMPERATURE,
-            api_key=Settings.OPENAI_API_KEY,
-            base_url=Settings.OPENAI_BASE_URL,
-        )
-
-    def generate_plan(self, query: str, intent_type: str, context: dict) -> Plan:
-        """生成完整执行计划"""
-        # 获取相似历史计划（模拟，实际需对接记忆系统）
-        similar_plans = get_similar_plans(query)
-
-        # 构建Prompt
-        prompt = create_planning_prompt(
+        # 3. 构建LLM提示（调用统一提示词配置）
+        user_prompt = create_planning_prompt(
             query=query,
             tools_str=self.tools_str,
-            similar_plans=similar_plans,
+            similar_plans_str=similar_plans,
             context=context
         )
+        system_prompt = get_planning_system_prompt(intent_type=intent_type)
 
-        # 调用LLM
-        messages = [
-            SystemMessage(content=get_planning_system_prompt(intent_type=intent_type)),
-            HumanMessage(content=prompt)
-        ]
-        response = self.model.invoke(messages)
-        parse_messages([response])  # 解析并打印消息
-
-        # 解析计划
-        return _parse_plan(
-            query=query,
-            plan_text=response.content,
-            available_tools=[t.name for t in self.tools]
+        # 4. 调用父类生成计划（复用LLM调用与解析逻辑）
+        plan = self.generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            query=query
         )
 
+        # 5. 二次校验计划兼容性（失败则重试一次）
+        valid, msg = validate_plan_for_react(plan)
+        if not valid:
+            logger.warning(f"初始计划兼容性校验失败：{msg}，将重试生成")
+            plan = self.generate(
+                system_prompt=system_prompt + "\n⚠️  上一次计划格式不符合ReAct执行器要求，请严格按create_planning_prompt中的JSON格式生成！",
+                user_prompt=user_prompt,
+                query=query
+            )
 
-def task_planner_node(state: AgentState) -> dict:
-    """LangGraph节点：生成任务执行计划"""
-    logger.info("🚦✨ [任务规划节点启动，开始生成执行计划...]")
+        # 6. 补充计划元数据（关联意图类型）
+        plan.metadata["intent_type"] = intent_type
+        return plan
+
+    def _format_similar_plans(self, query: str) -> str:
+        """格式化相似计划（突出ReAct兼容字段）"""
+        similar_plans = super().get_similar_plans(query)
+        if not similar_plans:
+            return "无相似历史计划，需严格按格式生成新计划"
+
+        formatted = []
+        for idx, plan in enumerate(similar_plans[:2]):  # 最多展示2个
+            # 仅保留符合ReAct格式的步骤
+            valid_steps = [s for s in plan.steps if isinstance(s.tool_args, dict)]
+            steps_info = ", ".join([f"步骤{s.id}（工具：{s.tool}）" for s in valid_steps[:2]])
+            formatted.append(f"计划{idx + 1}：ID={plan.id[:15]}...，目标={plan.goal[:20]}...，有效步骤={steps_info}")
+        return "; ".join(formatted)
+
+
+def task_planner_node(state: AgentState) -> AgentState:
+    """LangGraph规划节点：生成初始计划并更新状态（适配纯类属性AgentState）"""
+    logger.info(f"[规划节点] 启动 | 用户查询：{state.input[:50]}... | 意图类型：{state.intent_type}")
 
     try:
-        # 初始化生成器并创建计划
-        generator = PlanGenerator()
-        plan = generator.generate_plan(
-            query=state["input"],
-            intent_type=state.get("intent_type", "unknown"),
-            context=state.get("context", {})
-        )
+        # 1. 生成初始计划
+        generator = TaskPlanGenerator()
+        initial_plan = generator.generate_initial_plan(state)
 
-        # 记录成功日志
-        logger.info(f"✅ 计划生成成功 | ID: {plan.id} | 步骤数: {len(plan.steps)} | 置信度: {plan.confidence}")
-        print(f"Generated Plan:\n{plan}")
+        # 2. 更新状态（使用属性访问而非字典赋值，关键修复点）
+        state.set_current_plan(initial_plan)  # 调用封装方法设置当前计划
+        # （替代原 state["current_plan"] = initial_plan）
 
-        # 更新状态
-        return {
-            "current_plan": plan,
-            "plan_history": state.get("plan_history", []) + [plan],
-            "need_replan": False,
-            "messages": state.get("messages", []) + [
-                AIMessage(content=f"计划生成成功！具体信息：\n{plan}")
-            ]
-        }
+        state.plan_history.append(initial_plan)  # 直接操作列表属性
+        # （替代原 state["plan_history"].append(initial_plan)）
+
+        state.add_message(AIMessage(  # 调用封装方法添加消息
+            content=f"✅ 初始计划生成完成！\n计划ID：{initial_plan.id}\n目标：{initial_plan.goal}\n步骤数：{len(initial_plan.steps)}\n意图适配：{initial_plan.metadata['intent_type']}"
+        ))
+        # （替代原 state["messages"].append(...)）
+
+        state.need_replan = False  # 直接赋值布尔属性
+        state.task_completed = False  # 直接赋值布尔属性
+
+        logger.info(f"[规划节点] 成功 | 计划ID：{initial_plan.id} | 步骤数：{len(initial_plan.steps)}")
+        return state
 
     except Exception as e:
-        # 异常处理：生成应急计划
-        logger.exception(f"❌ 计划生成失败: {str(e)}")
+        error_msg = f"初始计划生成失败：{str(e)}"
+        logger.error(error_msg, exc_info=True)
 
-        # 构造应急计划（默认走意图分类）
-        default_plan = Plan(
-            id=f"emergency_plan_{int(time.time())}",
-            query=state["input"],
-            goal="应急处理（ fallback ）",
-            plan_type=PlanType.SEQUENTIAL,
-            steps=[
-                PlanStep(
-                    id="step_1",
-                    description="紧急意图分类",
-                    tool="intent_classifier",
-                    tool_args={},
-                    input_template="{query}",
-                    dependencies=[],
-                    expected_output="意图分类结果",
-                    confidence=0.5
-                )
-            ],
-            estimated_duration=30.0,
-            confidence=0.4,
-            metadata={"error": str(e), "fallback": True},
-            created_at=time.time()
-        )
+        # 3. 异常处理：更新错误状态（同样使用属性访问）
+        state.add_message(AIMessage(content=f"❌ {error_msg}，已启用应急计划"))
+        state.need_replan = True  # 直接赋值布尔属性
+        state.last_error = error_msg  # 记录错误信息
 
-        # 更新失败状态
-        return {
-            "current_plan": default_plan,
-            "plan_history": state.get("plan_history", []) + [default_plan],
-            "messages": [
-                AIMessage(content=f"计划生成异常（原因：{str(e)}），启用应急计划")
-            ]
-        }
+        return state

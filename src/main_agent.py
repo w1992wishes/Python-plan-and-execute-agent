@@ -1,10 +1,10 @@
-from graph_builder import build_agent_graph
-from state import create_initial_state  # 假设 state 模块提供初始状态创建函数
+from graph_builder import create_agent_workflow
 from agent_tools import get_tools_map
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from settings import Settings
 from logger_config import logger
+from state import AgentState
 
 
 class MultiStepAgent:
@@ -18,13 +18,16 @@ class MultiStepAgent:
             base_url=Settings.OPENAI_BASE_URL,
         )
         self.tools = get_tools_map()  # 工具映射表
-        self.graph = build_agent_graph()  # 加载状态机图
+        self.graph = create_agent_workflow()  # 加载状态机图
 
     def run(self, query: str) -> str:
         """执行单次查询，返回最终响应"""
-        state = create_initial_state(query)  # 初始化状态
-        state["messages"] = [HumanMessage(content=query)]  # 构建初始对话消息
-        result = self.graph.invoke(state)  # 执行状态机
+        initial_state = AgentState(
+            input=query,
+            messages=[],
+            intent_type="SIMPLE_QUERY"
+        )
+        result = self.graph.invoke(initial_state)  # 执行状态机
         return result["messages"][-1].content  # 提取最终回复
 
     def chat(self):

@@ -11,7 +11,7 @@ class MetricQueryTools:
 
     @tool("metric_query")
     @staticmethod
-    def query_metric(query: str) -> Union[str, Dict[str, Any]]:
+    async def query_metric(query: str) -> Union[str, Dict[str, Any]]:
         """自然语言查询业务指标（示例：河南/深圳/全系统客户量，支持时间筛选）"""
         try:
             # 解析地域标识
