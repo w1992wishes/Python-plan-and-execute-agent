@@ -65,16 +65,27 @@ class TaskReplanner(BasePlanGenerator):
 
             输出格式要求（必须严格遵守，否则执行器无法解析）：
             - 若有剩余步骤，返回：
-            {{
-              "action": {{
-                "steps": [
-                  {{
-                    "step": 序号（从1开始）,
-                    "description": "步骤描述（需包含工具和具体操作）"
-                  }}
-                ]
-              }}
-            }}
+{{
+  "id": "plan_1712345678",  // 格式：plan_时间戳
+  "query": "用户查询",       // 原样保留用户查询
+  "goal": "明确的计划目标",  // 与查询意图一致
+  "plan_type": "sequential", // 目前仅支持顺序执行
+  "steps": [
+    {{
+      "id": "step_1",       // 格式：step_序号
+      "description": "步骤具体操作描述（需符合ReAct思考逻辑）",
+      "tool": "工具名称",    // 必须在可用工具列表中，将被ReAct执行器直接调用
+      "tool_args": "工具参数（必须为JSON）"        // 工具参数（必须为JSON对象，ReAct执行器可直接解析）
+      "input_template": "自然语言输入模板（供ReAct执行器生成工具调用指令）",
+      "dependencies": [],   // 依赖的步骤ID列表（无依赖留空）
+      "expected_output": "预期输出的结构化描述（需为ReAct执行器可返回的格式）",
+      "confidence": 0.8     // 0.0-1.0的浮点数
+    }}
+  ],
+  "estimated_duration": 60,  // 预计总耗时（秒）
+  "confidence": 0.8,         // 整体计划置信度
+  "created_at": 1712345678   // 生成时间戳（整数）
+}}
 
             - 若任务已完成，返回：
             {{
