@@ -8,24 +8,55 @@ from agent_tools import get_all_tools
 import re
 import time
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
-def extract_json_safely(json_str: str) -> Dict[str, Any]:
-    """安全解析JSON字符串（处理常见格式错误）"""
+def extract_json_safely(input_str: str) -> Optional[Dict[str, Any]]:
+    """
+    安全提取JSON：兼容纯JSON字符串和Markdown JSON代码块，返回None时明确日志
+    :param input_str: 输入字符串（可能是纯JSON，也可能是带```json标记的代码块）
+    :return: 解析后的JSON对象（dict），失败则返回None并记录日志
+    """
+    # 第一步：先尝试直接解析（处理纯JSON字符串场景）
     try:
-        # 移除可能的代码块包裹（如 ```json ... ``` 或 </think>...</think>）
-        json_str = re.sub(r"^```(?:json)?\s*|\s*```$", "", json_str.strip())
-        json_str = re.sub(r"^</think>\s*|\s*</think>$", "", json_str.strip())
-        # 修复尾逗号问题（JSON不允许尾逗号）
-        json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
-        # 修复单引号问题（JSON要求双引号）
-        json_str = re.sub(r"(?<!\\)'", '"', json_str)
-        return json.loads(json_str)
+        clean_str = input_str.strip()
+        if not clean_str:
+            logger.warning("[JSON提取] 输入字符串为空，无法解析")
+            return None
+        parsed = json.loads(clean_str)
+        # 确保解析结果是字典（计划格式要求）
+        if not isinstance(parsed, dict):
+            logger.warning(f"[JSON提取] 解析结果非字典类型（{type(parsed).__name__}），不符合计划格式")
+            return None
+        return parsed
     except json.JSONDecodeError as e:
-        error_msg = f"JSON解析失败：{str(e)}，原始内容（前100字符）：{json_str[:100]}..."
-        logger.warning(error_msg)
-        return {"error": error_msg, "raw_content": json_str[:200]}
+        logger.debug(f"[JSON提取] 直接解析失败（{str(e)[:50]}），尝试提取Markdown代码块")
+
+    # 第二步：提取Markdown代码块中的JSON内容
+    try:
+        # 正则匹配：支持```json、```等多种代码块标记（兼容LLM可能的格式）
+        pattern = r'```(?:json)?\s*(.*?)\s*```'
+        match_result = re.search(pattern, input_str, re.DOTALL)
+        if not match_result:
+            logger.warning("[JSON提取] 未找到Markdown代码块标记（如```json）")
+            return None
+
+        markdown_json = match_result.group(1).strip()
+        if not markdown_json:
+            logger.warning("[JSON提取] Markdown代码块内内容为空")
+            return None
+
+        parsed = json.loads(markdown_json)
+        if not isinstance(parsed, dict):
+            logger.warning(f"[JSON提取] 代码块内解析结果非字典类型（{type(parsed).__name__}）")
+            return None
+        return parsed
+    except json.JSONDecodeError as e:
+        logger.error(f"[JSON提取] Markdown代码块解析失败：{str(e)}，原始内容：{markdown_json[:100]}...")
+    except Exception as e:
+        logger.error(f"[JSON提取] 未知异常：{str(e)}", exc_info=True)
+
+    return None
 
 
 def validate_plan_for_react(plan: Plan) -> tuple[bool, str]:
@@ -87,9 +118,7 @@ class BasePlanGenerator:
     def get_similar_plans(self, query: str) -> List[Plan]:
         """获取相似历史计划（模拟实现，实际需对接向量数据库）"""
         logger.debug(f"[计划工具] 查找与 '{query[:30]}...' 相似的历史计划")
-        # 模拟逻辑：实际场景需替换为向量检索（如Pinecone/Chroma）
-        # 此处返回空列表，可根据需求扩展历史计划复用逻辑
-        return []
+        return []  # 模拟返回空列表
 
     def _build_llm_messages(self, system_prompt: str, user_prompt: str) -> List[Any]:
         """构建LLM输入消息（固定System + Human结构，确保格式统一）"""
@@ -101,14 +130,16 @@ class BasePlanGenerator:
     def _parse_llm_response(self, query: str, response_content: str) -> Plan:
         """解析LLM返回的计划内容，生成Plan对象（含错误降级）"""
         try:
-            # 1. 提取并安全解析JSON
+            # 1. 提取并安全解析JSON（关键修复：增加plan_data空值判断）
             plan_data = extract_json_safely(response_content)
-            if "error" in plan_data:
-                raise ValueError(f"JSON解析异常：{plan_data['error']}")
+            if plan_data is None:
+                raise ValueError("LLM返回内容无法解析为JSON字典（可能格式错误或空内容）")
 
             # 2. 构建步骤列表（处理LLM返回的步骤数据）
             steps = []
-            for idx, step_data in enumerate(plan_data.get("steps", [])):
+            # 即使plan_data有值，也需判断"steps"是否存在（避免KeyError）
+            llm_steps = plan_data.get("steps", [])
+            for idx, step_data in enumerate(llm_steps):
                 # 补全步骤默认值（避免字段缺失）
                 step_id = step_data.get("id", f"step_{idx + 1}_{int(time.time() % 1000)}")
                 tool_name = step_data.get("tool", "")
@@ -133,15 +164,21 @@ class BasePlanGenerator:
                     confidence=min(max(step_data.get("confidence", 0.7), 0.1), 1.0)  # 置信度范围限制
                 ))
 
-            # 3. 构建完整计划对象
+            # 3. 构建完整计划对象（补全计划默认值，避免字段缺失）
+            plan_id = plan_data.get("id", f"plan_{int(time.time())}")
+            plan_goal = plan_data.get("goal", f"处理用户查询：{query[:30]}...")
+            plan_type = PlanType(plan_data.get("plan_type", "sequential").lower())
+            estimated_duration = max(plan_data.get("estimated_duration", 60.0), 10.0)
+            plan_confidence = min(max(plan_data.get("confidence", 0.7), 0.1), 1.0)
+
             plan = Plan(
-                id=plan_data.get("id", f"plan_{int(time.time())}"),
+                id=plan_id,
                 query=plan_data.get("query", query),
-                goal=plan_data.get("goal", f"处理用户查询：{query[:30]}..."),
-                plan_type=PlanType(plan_data.get("plan_type", "sequential").lower()),
+                goal=plan_goal,
+                plan_type=plan_type,
                 steps=steps,
-                estimated_duration=max(plan_data.get("estimated_duration", 60.0), 10.0),  # 最小10秒（避免不合理值）
-                confidence=min(max(plan_data.get("confidence", 0.7), 0.1), 1.0),
+                estimated_duration=estimated_duration,
+                confidence=plan_confidence,
                 metadata={
                     "generated_by": Settings.LLM_MODEL,
                     "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -151,7 +188,7 @@ class BasePlanGenerator:
                 created_at=plan_data.get("created_at", time.time())
             )
 
-            # 4. 校验计划兼容性（警告但不阻断，避免过度严格导致流程中断）
+            # 4. 校验计划兼容性（警告但不阻断）
             valid, msg = validate_plan_for_react(plan)
             if not valid:
                 logger.warning(f"计划兼容性校验未通过：{msg}，将尝试执行（建议优化）")
@@ -163,34 +200,43 @@ class BasePlanGenerator:
             error_msg = f"LLM计划解析失败：{str(e)}"
             logger.error(error_msg, exc_info=True)
 
+            # 应急计划：优先使用已启用的工具（避免引用不存在的工具）
+            emergency_tool = "metric_query" if "metric_query" in self.tool_names else "calculate"
+            emergency_steps = [
+                PlanStep(
+                    id=f"emergency_step_1_{int(time.time() % 1000)}",
+                    description="应急：直接调用核心工具获取数据",
+                    tool=emergency_tool,
+                    tool_args={"query": query},
+                    input_template=f"使用{emergency_tool}工具处理查询：{query}",
+                    dependencies=[],
+                    expected_output=f"通过{emergency_tool}工具获取的基础数据",
+                    confidence=0.5
+                )
+            ]
+
+            # 若没有任何启用工具，生成无工具的应急步骤
+            if not self.tool_names:
+                emergency_steps = [
+                    PlanStep(
+                        id=f"emergency_step_1_{int(time.time() % 1000)}",
+                        description="应急：无可用工具，直接返回查询建议",
+                        tool="",
+                        tool_args={},
+                        input_template=f"分析用户查询：{query}",
+                        dependencies=[],
+                        expected_output="基于查询的自然语言建议",
+                        confidence=0.3
+                    )
+                ]
+
             emergency_plan = Plan(
                 id=f"emergency_plan_{int(time.time())}",
                 query=query,
                 goal="应急处理：计划解析失败后的降级流程",
                 plan_type=PlanType.SEQUENTIAL,
-                steps=[
-                    PlanStep(
-                        id=f"emergency_step_1_{int(time.time() % 1000)}",
-                        description="重新执行意图分类（计划解析失败降级）",
-                        tool="intent_classifier",
-                        tool_args={"query": query},
-                        input_template="基于用户查询'{query}'重新分类意图",
-                        dependencies=[],
-                        expected_output="获取准确的意图类型（SIMPLE_QUERY/COMPARISON/ROOT_CAUSE_ANALYSIS）",
-                        confidence=0.5
-                    ),
-                    PlanStep(
-                        id=f"emergency_step_2_{int(time.time() % 1000)}",
-                        description="使用搜索工具获取基础信息（应急方案）",
-                        tool="tavily_search" if "tavily_search" in self.tool_names else "",
-                        tool_args={"query": query},
-                        input_template="搜索关键词：{query}",
-                        dependencies=["emergency_step_1"],
-                        expected_output="获取与查询相关的基础信息（用于后续回答）",
-                        confidence=0.4
-                    )
-                ],
-                estimated_duration=120.0,  # 应急计划预留更长时间
+                steps=emergency_steps,
+                estimated_duration=120.0,
                 confidence=0.4,
                 metadata={
                     "error": error_msg,
@@ -201,24 +247,3 @@ class BasePlanGenerator:
             )
 
             return emergency_plan
-
-    def generate(self, system_prompt: str, user_prompt: str, query: str) -> Plan:
-        """通用计划生成入口（调用LLM + 解析结果）"""
-        try:
-            # 1. 构建LLM输入消息
-            messages = self._build_llm_messages(system_prompt, user_prompt)
-            logger.debug(f"[计划生成器] 调用LLM，消息数：{len(messages)}，查询预览：{query[:30]}...")
-
-            # 2. 调用LLM获取计划文本
-            response = self.llm.invoke(messages)
-            if not hasattr(response, "content") or not response.content:
-                raise ValueError("LLM返回空内容，无法生成计划")
-
-            # 3. 解析LLM响应并生成Plan对象
-            return self._parse_llm_response(query, response.content)
-
-        except Exception as e:
-            error_msg = f"计划生成失败：{str(e)}"
-            logger.error(error_msg, exc_info=True)
-            # 降级：返回应急计划
-            return self._parse_llm_response(query, f'{{"error": "{error_msg}", "steps": []}}')

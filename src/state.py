@@ -95,7 +95,7 @@ class AgentState:
             "description": step.description,
             "tool_used": step.tool,
             "result": result,
-            "status": "completed" if "error" not in result.lower() else "failed",
+            "status": "completed" if "error" not in str(result).lower() else "failed",
             "executed_at": time.strftime("%Y-%m-%d %H:%M:%S")
         })
         # 执行后自动标记需要重规划

@@ -48,7 +48,7 @@ def get_planning_system_prompt(intent_type: str = "SIMPLE_QUERY") -> str:
 def create_planning_prompt(
         query: str,
         tools_str: str,
-        similar_plans_str: str,
+        similar_plans_str: str = "",
         context: Dict[str, Any] = None
 ) -> str:
     """构建规划阶段的用户提示词（强化工具参数与ReAct执行器对齐）"""
@@ -89,29 +89,3 @@ def create_planning_prompt(
 3. `input_template` 需包含自然语言指令，指导ReAct执行器如何使用工具参数
 4. 输出仅包含上述JSON，无其他内容，避免干扰ReAct执行器的解析逻辑
 """
-
-
-def get_replanning_system_prompt(intent_type: str = "SIMPLE_QUERY") -> str:
-    """重规划系统提示词（适配ReAct执行器的工具调用逻辑）"""
-    base_replan = """你是专业任务重规划专家，需根据执行进度优化原有计划，确保与ReAct执行器兼容。
-
-核心能力：
-- 保留未执行步骤，删除已执行步骤
-- 基于ReAct执行器返回的结果调整步骤参数和依赖关系
-- 处理执行错误（如更换工具、修正参数格式以适配ReAct执行器）
-
-重规划规范：
-1. 输出格式必须与初始计划完全一致（字段、类型、约束相同）
-2. 步骤ID不可与已执行步骤重复
-3. 需引用已执行步骤结果（格式：{step_id_result}，与ReAct执行器兼容）
-4. 若所有步骤完成，返回空steps列表并在goal标记"任务完成"
-5. 调整后的工具参数必须符合ReAct执行器的输入要求（标准JSON对象）
-"""
-
-    intent_specs = {
-        "SIMPLE_QUERY": "专项要求：优先修正参数格式错误，确保ReAct执行器可解析",
-        "COMPARISON": "专项要求：确保对比维度一致性，补充差异分析细节，工具参数需适配ReAct",
-        "ROOT_CAUSE_ANALYSIS": "专项要求：针对错误步骤生成排查子步骤，强化根因验证，参数格式兼容ReAct"
-    }
-
-    return base_replan + intent_specs.get(intent_type, intent_specs["SIMPLE_QUERY"])

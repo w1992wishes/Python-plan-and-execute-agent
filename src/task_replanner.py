@@ -1,137 +1,142 @@
-from state import AgentState, Plan
-from langchain_core.messages import AIMessage
+from state import AgentState, Plan, PlanStep  # 确保导入PlanStep
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from logger_config import logger
-from prompt_setting import get_replanning_system_prompt
-from plan_utils import BasePlanGenerator, validate_plan_for_react
-import json
+from plan_utils import BasePlanGenerator
+from settings import Settings
+from langchain_core.prompts import ChatPromptTemplate
 
+from pydantic import BaseModel, Field
+from typing import List, Union
+
+class Response(BaseModel):
+    """Response to user."""
+    response: str = Field(description="直接回复用户的内容")
+
+class Act(BaseModel):
+    """Action to perform."""
+    action: Union[Response, Plan] = Field(
+        description="要执行的操作。如果要回复用户，使用Response；如果需要进一步使用工具，使用Plan。"
+    )
 
 class TaskReplanner(BasePlanGenerator):
-    """任务重规划器（适配ReAct执行器）"""
-
-    def update_plan(self, state: AgentState) -> Plan:
-        """根据执行状态更新计划（删除已完成步骤、修复参数）"""
-        # 1. 提取核心状态信息（使用属性访问，关键修复点）
+    async def aupdate_plan(self, state: AgentState):
+        """异步重规划（核心：补充已执行步骤上下文）"""
         original_plan = state.current_plan
         executed_steps = state.executed_steps
-        error = state.last_error  # 直接访问last_error属性，替代state.get("last_error", "")
-        query = state.input
-        # 直接访问metadata字典的get方法（original_plan.metadata是字典）
-        intent_type = original_plan.metadata.get("intent_type", "SIMPLE_QUERY")
 
-        # 2. 格式化已执行步骤（供LLM参考结果）
-        formatted_executed = self._format_executed_steps(executed_steps)
-        # 格式化未执行步骤（供LLM调整）
-        formatted_unexecuted = self._format_unexecuted_steps(original_plan, executed_steps)
+        # 1. 格式化原计划步骤（适配模板的"step编号: 描述"格式）
+        original_plan_steps = []
+        for idx, step in enumerate(original_plan.steps, 1):
+            original_plan_steps.append(
+                f"step{idx}: {step.description}（工具：{step.tool}，参数：{step.tool_args}）"
+            )
+        formatted_original_plan = "\n".join(original_plan_steps)
 
-        # 3. 构建重规划提示
-        user_prompt = f"""### 重规划输入信息
-- 用户查询：{query}
-- 原计划ID：{original_plan.id}
-- 已执行步骤（ReAct结果）：{formatted_executed}
-- 未执行步骤：{formatted_unexecuted}
-- 执行错误（若有）：{error}
-- 可用工具：{self.tools_str}
+        # 2. 格式化已执行步骤（适配模板的"任务: 结果"格式）
+        past_steps = []
+        for item in executed_steps:
+            step_id = item["step_id"]
+            step = next((s for s in original_plan.steps if s.id == step_id), None)
+            step_desc = step.description if step else f"步骤{step_id}"
+            # 结果截断避免过长
+            result = str(item["result"])[:100] + ("..." if len(str(item["result"])) > 100 else "")
+            past_steps.append(f"任务：{step_desc} → 结果：{result}")
+        formatted_past_steps = "\n".join(past_steps) if past_steps else "无"
 
-### 重规划规则（必须遵守）
-1. 删除已执行步骤（已执行ID：{[s['step_id'] for s in executed_steps]}）
-2. 修复未执行步骤的参数格式（确保tool_args为JSON对象，适配ReAct）
-3. 引用已执行步骤结果时用 {{step_id_result}} 格式（如 {{step_1_result}}）
-4. 若所有步骤完成，返回空steps列表并在goal标记"任务完成"
-5. 若执行错误是工具参数问题，优先修正参数格式
-"""
+        replanner_prompt = ChatPromptTemplate.from_template(
+            """你是专业任务重规划专家，需根据执行进度优化原有计划，确保与ReAct执行器兼容。
 
-        # 4. 调用LLM生成更新后计划
-        system_prompt = get_replanning_system_prompt(intent_type=intent_type)
-        updated_plan = self.generate(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            query=query
+            核心规则：
+            1. 必须基于原始目标、原计划和已执行步骤结果进行重规划
+            2. 仅保留未执行的步骤（删除已完成步骤），新增步骤需补充在未执行步骤之后
+            3. 若所有步骤已完成，直接返回用户最终答案
+            4. 步骤描述需明确包含工具调用意图（如"使用metric_query查询..."、"使用calculate计算..."）
+
+             Your objective was this:
+            {input}
+
+            Your original plan was this (each step is "step编号: 描述"):
+            {plan}
+
+            You have currently done these steps (任务: 结果):
+            {past_steps}
+
+            You MUST return your response in one of the following JSON formats (escape curly braces correctly):
+
+            输出格式要求（必须严格遵守，否则执行器无法解析）：
+            - 若有剩余步骤，返回：
+            {{
+              "action": {{
+                "steps": [
+                  {{
+                    "step": 序号（从1开始）,
+                    "description": "步骤描述（需包含工具和具体操作）"
+                  }}
+                ]
+              }}
+            }}
+
+            - 若任务已完成，返回：
+            {{
+              "action": {{
+                "response": "直接回复用户的内容（包含最终答案，需基于已执行步骤结果）"
+              }}
+            }}
+
+            注意：
+            - 步骤序号仅用于展示，实际执行时会自动生成不重复的ID
+            - 已执行步骤结果可直接引用（如"根据步骤2的结果，计算..."）
+            - 工具参数需符合要求（如metric_query的query参数为自然语言，calculate的expression为数学公式）
+            """
         )
 
-        # 5. 校验更新后计划的兼容性
-        valid, msg = validate_plan_for_react(updated_plan)
-        if not valid:
-            logger.warning(f"重规划计划校验失败：{msg}，重试生成")
-            updated_plan = self.generate(
-                system_prompt=system_prompt + "\n⚠️  计划需符合ReAct执行器格式（tool_args为JSON对象），请修正！",
-                user_prompt=user_prompt,
-                query=query
-            )
+        # 4. 异步调用LLM
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=Settings.LLM_MODEL,
+            temperature=0.3,
+            api_key=Settings.OPENAI_API_KEY,
+            base_url=Settings.OPENAI_BASE_URL,
+        )
 
-        # 6. 补充重规划元数据
-        updated_plan.metadata.update({
-            "original_plan_id": original_plan.id,
-            "updated_reason": error if error else "正常执行后更新",
-            "executed_steps_count": len(executed_steps)
+        replanner = replanner_prompt | llm.with_structured_output(Act)
+
+        replan_response = await replanner.ainvoke({
+            "input": state.input,
+            "plan": formatted_original_plan,
+            "past_steps": formatted_past_steps if past_steps else "No steps completed yet."
         })
-        return updated_plan
 
-    def _format_executed_steps(self, executed_steps: list) -> str:
-        """格式化已执行步骤（突出ReAct结果）"""
-        if not executed_steps:
-            return "无已执行步骤"
+        return replan_response
 
-        formatted = []
-        for step in executed_steps:
-            # 简化结果展示（避免过长）
-            result = step["result"][:100] + "..." if len(str(step["result"])) > 100 else str(step["result"])
-            formatted.append(f"步骤ID：{step['step_id']} | 工具：{step['tool_used']} | 结果：{result}")
-        return "\n".join(formatted)
+# 异步重规划节点（保持原有逻辑，适配新的Plan结构）
+async def task_replanner_node(state: AgentState) -> AgentState:
+    logger.info(f"[重规划节点] 启动 | 原计划ID：{state.current_plan.id}")
+    replanner = TaskReplanner()
+    replan_response = await replanner.aupdate_plan(state)
 
-    def _format_unexecuted_steps(self, plan: Plan, executed_steps: list) -> str:
-        """格式化未执行步骤（标记ReAct兼容性）"""
-        executed_ids = [s["step_id"] for s in executed_steps]
-        unexecuted = [s for s in plan.steps if s.id not in executed_ids]
-
-        if not unexecuted:
-            return "所有步骤已执行"
-
-        formatted = []
-        for step in unexecuted:
-            # 标记参数是否兼容ReAct
-            args_valid = "✅" if isinstance(step.tool_args, dict) else "❌"
-            formatted.append(
-                f"步骤ID：{step.id} | 工具：{step.tool} | 参数兼容：{args_valid} | 描述：{step.description[:50]}...")
-        return "\n".join(formatted)
-
-
-def task_replanner_node(state: AgentState) -> AgentState:
-    """LangGraph重规划节点：更新计划并判断任务是否完成（适配纯类属性AgentState）"""
-    logger.info(f"[重规划节点] 启动 | 原计划ID：{state.current_plan.id} | 已执行步骤：{len(state.executed_steps)}")
-
-    try:
-        # 1. 初始化重规划器并更新计划
-        replanner = TaskReplanner()
-        updated_plan = replanner.update_plan(state)
-
-        # 2. 判断任务是否完成（空步骤 → 完成）
-        if not updated_plan.steps:
-            state.task_completed = True  # 直接修改属性，替代state["task_completed"] = True
-            state.add_message(AIMessage(  # 使用封装方法添加消息
-                content=f"🎉 任务执行完成！\n原计划ID：{state.current_plan.id}\n已执行步骤：{len(state.executed_steps)}\n最终结果：{state.executed_steps[-1]['result'][:150]}..."
-            ))
-            logger.info(
-                f"[重规划节点] 任务完成 | 原计划ID：{state.current_plan.id} | 已执行步骤：{len(state.executed_steps)}")
-            return state
-
-        # 3. 任务未完成 → 更新计划状态（使用属性访问和封装方法）
-        state.set_current_plan(updated_plan)  # 调用封装方法，替代state["current_plan"] = updated_plan
-        state.plan_history.append(updated_plan)  # 直接访问列表属性，替代state["plan_history"].append(...)
-        state.add_message(AIMessage(  # 使用封装方法添加消息
-            content=f"🔄 重规划完成！\n新计划ID：{updated_plan.id}\n剩余步骤：{len(updated_plan.steps)}\n更新原因：{updated_plan.metadata['updated_reason'][:50]}..."
+    # 根据 replan 结果更新 state
+    if isinstance(replan_response.action, Response):
+        state.task_completed = True
+        final_result = replan_response.action.response
+        state.add_message(AIMessage(
+            content=f"🎉 任务完成！\n已执行步骤：{len(state.executed_steps)}\n最终结果：{str(final_result)[:150]}..."
         ))
-        state.need_replan = False  # 直接修改属性，替代state["need_replan"] = False
-        state.last_error = ""  # 直接修改属性，替代state["last_error"] = ""
-
-        logger.info(f"[重规划节点] 成功 | 新计划ID：{updated_plan.id} | 剩余步骤：{len(updated_plan.steps)}")
+        return state
+    else:
+        # 若返回新计划，更新 plan 字段（保留剩余步骤）
+        # 更新计划状态
+        updated_plan = replan_response.action
+        state.set_current_plan(updated_plan)
+        state.add_message(AIMessage(
+            content=f"🔄 重规划完成！\n新计划ID：{updated_plan.id}\n剩余步骤：{len(updated_plan.steps)}\n"
+                    f"步骤详情：\n" + "\n".join([f"- {s.id}: {s.description}" for s in updated_plan.steps[:3]])
+                    + ("..." if len(updated_plan.steps) > 3 else "")
+        ))
+        logger.info(f"[重规划节点] 完成 | 剩余步骤：{len(updated_plan.steps)}")
         return state
 
-    except Exception as e:
-        error_msg = f"重规划失败：{str(e)}"
-        logger.error(error_msg, exc_info=True)
 
-        # 4. 异常处理：保留原计划并标记重试
-        state.add_message(AIMessage(content=f"❌ {error_msg}，将重试原计划"))  # 使用封装方法
-        state.need_replan = True  # 直接修改属性，替代state["need_replan"] = True
-        return state
+
+
+
