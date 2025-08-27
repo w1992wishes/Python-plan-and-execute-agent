@@ -22,22 +22,15 @@ def create_async_agent_workflow() -> CompiledStateGraph:
     workflow.set_entry_point("classify_intent")
     workflow.add_edge("classify_intent", "plan")
     workflow.add_edge("plan", "execute")
+    workflow.add_edge("execute", "replan")
 
     # 4. 条件路由（同步路由函数可直接用于异步工作流）
     def workflow_router(state: AgentState) -> str:
         if state.task_completed:
             return "end"
-        elif state.need_replan:
-            return "replan"
         else:
             return "execute"
 
-    # 5. 添加条件边
-    workflow.add_conditional_edges(
-        "execute",
-        workflow_router,
-        {"replan": "replan", "execute": "execute", "end": END}
-    )
     workflow.add_conditional_edges(
         "replan",
         workflow_router,

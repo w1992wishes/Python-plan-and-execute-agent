@@ -70,6 +70,5 @@ async def action_executor_node(state: AgentState) -> AgentState:
     state.add_message(AIMessage(
         content=f"📌 步骤{current_step.id}执行结果：{result}..."
     ))
-    state.need_replan = True
     logger.info(f"[执行节点] 步骤完成 | ID：{current_step.id}")
     return state
