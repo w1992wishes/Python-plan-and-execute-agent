@@ -6,3 +6,5 @@ langchain_core==0.3.74
 langchain==0.3.27
 pydantic==2.11.7
 streamlit==1.49.0
+langsmith==0.4.16
+IPython==9.5.0
