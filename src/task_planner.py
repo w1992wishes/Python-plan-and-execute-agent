@@ -42,7 +42,6 @@ class TaskPlanGenerator(BasePlanGenerator):
         system_prompt = get_planning_system_prompt(intent_type=intent_type)
         # 异步调用生成计划
         plan = await self.generate_async(system_prompt, user_prompt, query)  # 关键：await
-        plan.metadata["intent_type"] = intent_type
         return plan
 
 # 异步规划节点

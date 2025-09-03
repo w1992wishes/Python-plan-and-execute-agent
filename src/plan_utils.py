@@ -1,4 +1,4 @@
-from state import Plan, PlanStep, PlanType, AgentState
+from state import Plan, PlanStep, PlanType
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.tools.render import render_text_description
@@ -178,14 +178,7 @@ class BasePlanGenerator:
                 plan_type=plan_type,
                 steps=steps,
                 estimated_duration=estimated_duration,
-                confidence=plan_confidence,
-                metadata={
-                    "generated_by": Settings.LLM_MODEL,
-                    "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "tool_count": len(self.tools),
-                    **plan_data.get("metadata", {})  # 合并LLM返回的元数据
-                },
-                created_at=plan_data.get("created_at", time.time())
+                confidence=plan_confidence
             )
 
             # 4. 校验计划兼容性（警告但不阻断）
@@ -237,13 +230,7 @@ class BasePlanGenerator:
                 plan_type=PlanType.SEQUENTIAL,
                 steps=emergency_steps,
                 estimated_duration=120.0,
-                confidence=0.4,
-                metadata={
-                    "error": error_msg,
-                    "fallback": True,
-                    "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                },
-                created_at=time.time()
+                confidence=0.4
             )
 
             return emergency_plan

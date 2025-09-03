@@ -34,16 +34,6 @@ class Plan:
     steps: List[PlanStep]  # 步骤列表（按执行顺序排列）
     estimated_duration: float = 60.0  # 预计总耗时（秒）
     confidence: float = 0.7  # 整体计划置信度（0.0-1.0）
-    metadata: Dict[str, Any] = field(
-        default_factory=lambda: {
-            "generated_by": "llm_planner",
-            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "intent_type": "SIMPLE_QUERY"  # 关联意图类型
-        }
-    )
-    created_at: float = field(default_factory=time.time)  # 生成时间戳（秒）
-    updated_at: float = field(default_factory=time.time)  # 最后更新时间戳
-
 
 @dataclass
 class AgentState:
@@ -82,9 +72,6 @@ class AgentState:
         if intent_name not in valid_intents:
             raise ValueError(f"intent_type必须是{valid_intents}之一，当前：{intent_name}")
         self.intent_type = intent_name
-        # 同步更新当前计划的意图类型（如果有计划）
-        if self.current_plan:
-            self.current_plan.metadata["intent_type"] = intent_name
 
     def add_executed_step(self, step: PlanStep, result: str) -> None:
         """添加已执行步骤记录（自动格式化，避免手动构造字典）"""
@@ -118,17 +105,6 @@ class AgentState:
             self.plan_history.append(self.current_plan)
         # 设置新计划
         self.current_plan = plan
-        plan.updated_at = time.time()  # 更新计划时间戳
-
-    # ------------------------------
-    # 辅助方法
-    # ------------------------------
-    def _get_task_duration(self) -> float:
-        """计算任务总耗时（从第一个计划生成到现在）"""
-        if not self.plan_history and not self.current_plan:
-            return 0.0
-        first_plan = self.plan_history[0] if self.plan_history else self.current_plan
-        return time.time() - first_plan.created_at
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于序列化或日志）"""
@@ -142,6 +118,5 @@ class AgentState:
             "need_replan": self.need_replan,
             "task_completed": self.task_completed,
             "last_error": self.last_error,
-            "message_count": len(self.messages),
-            "task_duration": self._get_task_duration()
+            "message_count": len(self.messages)
         }
