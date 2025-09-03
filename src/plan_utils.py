@@ -1,4 +1,4 @@
-from state import Plan, PlanStep, PlanType
+from state import Plan, PlanStep
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.tools.render import render_text_description
@@ -64,8 +64,6 @@ def validate_plan_for_react(plan: Plan) -> tuple[bool, str]:
     # 1. 校验计划核心字段
     if not plan.id.startswith("plan_"):
         return False, f"计划ID格式错误：{plan.id}（需以'plan_'开头，如 plan_1712345678）"
-    if plan.plan_type != PlanType.SEQUENTIAL:
-        return False, f"当前仅支持顺序执行计划（sequential），当前类型：{plan.plan_type.value}"
     if not plan.steps:
         return False, "计划不能为空（需至少包含1个步骤）"
 
@@ -167,7 +165,6 @@ class BasePlanGenerator:
             # 3. 构建完整计划对象（补全计划默认值，避免字段缺失）
             plan_id = plan_data.get("id", f"plan_{int(time.time())}")
             plan_goal = plan_data.get("goal", f"处理用户查询：{query[:30]}...")
-            plan_type = PlanType(plan_data.get("plan_type", "sequential").lower())
             estimated_duration = max(plan_data.get("estimated_duration", 60.0), 10.0)
             plan_confidence = min(max(plan_data.get("confidence", 0.7), 0.1), 1.0)
 
@@ -175,7 +172,6 @@ class BasePlanGenerator:
                 id=plan_id,
                 query=plan_data.get("query", query),
                 goal=plan_goal,
-                plan_type=plan_type,
                 steps=steps,
                 estimated_duration=estimated_duration,
                 confidence=plan_confidence
@@ -227,7 +223,6 @@ class BasePlanGenerator:
                 id=f"emergency_plan_{int(time.time())}",
                 query=query,
                 goal="应急处理：计划解析失败后的降级流程",
-                plan_type=PlanType.SEQUENTIAL,
                 steps=emergency_steps,
                 estimated_duration=120.0,
                 confidence=0.4

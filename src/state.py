@@ -4,12 +4,6 @@ from typing import List, Dict, Any, Optional, Union
 import time
 
 
-class PlanType(str, Enum):
-    """计划类型枚举（顺序/并行）"""
-    SEQUENTIAL = "sequential"  # 顺序执行（当前默认支持）
-    PARALLEL = "parallel"      # 并行执行（预留扩展）
-
-
 @dataclass
 class PlanStep:
     """单个执行步骤模型（与ReAct执行器参数严格对齐）"""
@@ -30,7 +24,6 @@ class Plan:
     id: str  # 计划唯一ID，格式：plan_1712345678（时间戳）
     query: str  # 用户原始查询（与AgentState.input一致）
     goal: str  # 计划总目标（如："获取2024澳网男单冠军及其家乡"）
-    plan_type: PlanType  # 计划类型（当前仅支持SEQUENTIAL）
     steps: List[PlanStep]  # 步骤列表（按执行顺序排列）
     estimated_duration: float = 60.0  # 预计总耗时（秒）
     confidence: float = 0.7  # 整体计划置信度（0.0-1.0）
