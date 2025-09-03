@@ -35,22 +35,19 @@ class TaskReplanner(BasePlanGenerator):
         # 2. 格式化已执行步骤（适配模板的"任务: 结果"格式）
         past_steps = []
         for item in executed_steps:
-            step_id = item["step_id"]
-            step = next((s for s in original_plan.steps if s.id == step_id), None)
-            step_desc = step.description if step else f"步骤{step_id}"
+            step_desc = item["description"]
             # 结果截断避免过长
-            result = str(item["result"])[:100] + ("..." if len(str(item["result"])) > 100 else "")
+            result = str(item["result"])
             past_steps.append(f"任务：{step_desc} → 结果：{result}")
         formatted_past_steps = "\n".join(past_steps) if past_steps else "无"
 
         replanner_prompt = ChatPromptTemplate.from_template(
-            """你是专业任务重规划专家，需根据执行进度优化原有计划，确保与ReAct执行器兼容。
+            """你是专业任务重规划专家，需根据执行进度优化原有计划。
 
             核心规则：
             1. 必须基于原始目标、原计划和已执行步骤结果进行重规划
-            2. 仅保留未执行的步骤（删除已完成步骤），新增步骤需补充在未执行步骤之后
-            3. 若所有步骤已完成，直接返回用户最终答案
-            4. 步骤描述需明确包含工具调用意图（如"使用metric_query查询..."、"使用calculate计算..."）
+            2. 仅保留未执行的步骤，删除已完成步骤
+            3. 若所有步骤已完成，则基于所有步骤结果回答用户最终答案
 
              Your objective was this:
             {input}

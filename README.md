@@ -93,7 +93,7 @@ class ReplanGenerator:
 
 3. **运行主程序**
    ```bash
-   python src/main_agent.py       7月全系统客户量是多少   7月全系统和深圳哪个客户量是多少
+   python src/main_agent.py       7月全系统客户量是多少   7月全系统和深圳哪个客户量更多
    ```
 
 4. **自定义工具**
