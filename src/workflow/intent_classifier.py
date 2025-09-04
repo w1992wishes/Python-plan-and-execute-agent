@@ -1,10 +1,10 @@
-from state import AgentState  # 导入纯类属性的AgentState
-from logger_config import logger
+from src.workflow.state import AgentState  # 导入纯类属性的AgentState
+from src.log.logger import logger
 from langchain_openai import ChatOpenAI  # 补充LLM依赖（原代码缺失）
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from typing import Dict, Any
-from settings import Settings  # 补充配置依赖（原代码缺失）
-from plan_utils import extract_json_safely  # 补充JSON解析工具（原代码缺失）
+from src.setting.settings import Settings  # 补充配置依赖（原代码缺失）
+from src.workflow.plan_utils import extract_json_safely  # 补充JSON解析工具（原代码缺失）
 
 
 class IntentClassifierAgent:

@@ -6,10 +6,6 @@ import re
 from typing import Any, Dict, Union
 import asyncio
 
-
-
-
-
 @tool
 async def query_metric(query: str) -> Union[str, Dict[str, Any]]:
 

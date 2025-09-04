@@ -1,12 +1,13 @@
-from state import AgentState, Plan, PlanStep  # 确保导入PlanStep
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
-from logger_config import logger
-from plan_utils import BasePlanGenerator
-from settings import Settings
+from src.workflow.state import AgentState
+from src.model.plan import Plan  # 确保导入PlanStep
+from langchain_core.messages import AIMessage
+from src.log.logger import logger
+from src.workflow.plan_utils import BasePlanGenerator
+from src.setting.settings import Settings
 from langchain_core.prompts import ChatPromptTemplate
 
 from pydantic import BaseModel, Field
-from typing import List, Union
+from typing import Union
 
 class Response(BaseModel):
     """Response to user."""
@@ -28,7 +29,7 @@ class TaskReplanner(BasePlanGenerator):
         original_plan_steps = []
         for idx, step in enumerate(original_plan.steps, 1):
             original_plan_steps.append(
-                f"step{idx}: {step.description}（工具：{step.tool}，参数：{step.tool_args}）"
+                f"step{idx}: {step.description}（工具：{step.tool}）"
             )
         formatted_original_plan = "\n".join(original_plan_steps)
 

@@ -1,10 +1,10 @@
-from state import Plan, PlanStep
+from src.model.plan import Plan, PlanStep
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain.tools.render import render_text_description
-from logger_config import logger
-from settings import Settings
-from agent_tools import get_all_tools
+from src.log.logger import logger
+from src.setting.settings import Settings
+from src.workflow.agent_tools import get_all_tools
 import re
 import time
 import json
@@ -76,13 +76,6 @@ def validate_plan_for_react(plan: Plan) -> tuple[bool, str]:
         # 步骤ID唯一性校验
         if step_ids.count(step.id) > 1:
             return False, f"步骤ID重复：{step.id}（所有步骤ID必须唯一）"
-        # 工具参数格式校验（ReAct执行器要求JSON对象）
-        if not isinstance(step.tool_args, dict):
-            return False, f"步骤{step.id}的tool_args格式错误（需为JSON对象，当前：{type(step.tool_args).__name__}）"
-        # 依赖步骤有效性校验
-        for dep in step.dependencies:
-            if dep not in step_ids:
-                return False, f"步骤{step.id}依赖无效步骤：{dep}（未在计划中找到该步骤ID）"
         # 置信度范围校验（0.0-1.0）
         if not (0.0 <= step.confidence <= 1.0):
             return False, f"步骤{step.id}的置信度无效：{step.confidence}（需在0.0-1.0范围内）"
@@ -142,23 +135,11 @@ class BasePlanGenerator:
                 step_id = step_data.get("id", f"step_{idx + 1}_{int(time.time() % 1000)}")
                 tool_name = step_data.get("tool", "")
 
-                # 过滤未启用的工具（避免执行时工具不存在）
-                if tool_name and tool_name not in self.tool_names:
-                    logger.warning(f"步骤{step_id}引用未启用工具：{tool_name}，已清空工具配置")
-                    tool_name = ""
-                    tool_args = {}
-                else:
-                    tool_args = step_data.get("tool_args", {})
-
                 # 构建单个步骤对象
                 steps.append(PlanStep(
                     id=step_id,
                     description=step_data.get("description", f"未命名步骤（{idx + 1}）"),
                     tool=tool_name,
-                    tool_args=tool_args,
-                    input_template=step_data.get("input_template", f"基于查询'{query[:20]}...'执行步骤"),
-                    dependencies=step_data.get("dependencies", []),
-                    expected_output=step_data.get("expected_output", "未定义预期输出"),
                     confidence=min(max(step_data.get("confidence", 0.7), 0.1), 1.0)  # 置信度范围限制
                 ))
 
@@ -173,7 +154,6 @@ class BasePlanGenerator:
                 query=plan_data.get("query", query),
                 goal=plan_goal,
                 steps=steps,
-                estimated_duration=estimated_duration,
                 confidence=plan_confidence
             )
 
@@ -196,10 +176,6 @@ class BasePlanGenerator:
                     id=f"emergency_step_1_{int(time.time() % 1000)}",
                     description="应急：直接调用核心工具获取数据",
                     tool=emergency_tool,
-                    tool_args={"query": query},
-                    input_template=f"使用{emergency_tool}工具处理查询：{query}",
-                    dependencies=[],
-                    expected_output=f"通过{emergency_tool}工具获取的基础数据",
                     confidence=0.5
                 )
             ]
@@ -211,10 +187,6 @@ class BasePlanGenerator:
                         id=f"emergency_step_1_{int(time.time() % 1000)}",
                         description="应急：无可用工具，直接返回查询建议",
                         tool="",
-                        tool_args={},
-                        input_template=f"分析用户查询：{query}",
-                        dependencies=[],
-                        expected_output="基于查询的自然语言建议",
                         confidence=0.3
                     )
                 ]
@@ -224,7 +196,6 @@ class BasePlanGenerator:
                 query=query,
                 goal="应急处理：计划解析失败后的降级流程",
                 steps=emergency_steps,
-                estimated_duration=120.0,
                 confidence=0.4
             )
 

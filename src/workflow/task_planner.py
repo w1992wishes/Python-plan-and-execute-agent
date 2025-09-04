@@ -1,15 +1,16 @@
-from state import AgentState, Plan
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
-from logger_config import logger
-from prompt_setting import get_planning_system_prompt, create_planning_prompt
-from plan_utils import BasePlanGenerator
+from src.model.plan import Plan
+from src.workflow.state import AgentState
+from langchain_core.messages import AIMessage
+from src.log.logger import logger
+from src.setting.prompt_setting import get_planning_system_prompt, create_planning_prompt
+from src.workflow.plan_utils import BasePlanGenerator
 
 
 class TaskPlanGenerator(BasePlanGenerator):
     def __init__(self):
         super().__init__()
         # 替换为异步工具
-        from agent_tools import get_all_tools
+        from src.workflow.agent_tools import get_all_tools
         self.tools = get_all_tools()
         self.tools_str = "\n".join([f"- {t.name}：{t.description}" for t in self.tools])
 

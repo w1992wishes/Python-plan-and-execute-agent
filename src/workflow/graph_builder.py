@@ -1,11 +1,11 @@
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
-from state import AgentState
+from src.workflow.state import AgentState
 # 导入所有异步节点
-from intent_classifier import intent_classifier_node
-from task_planner import task_planner_node
-from action_executor_react import action_executor_node
-from task_replanner import task_replanner_node
+from src.workflow.intent_classifier import intent_classifier_node
+from src.workflow.task_planner import task_planner_node
+from src.workflow.action_executor_react import action_executor_node
+from src.workflow.task_replanner import task_replanner_node
 
 def create_async_agent_workflow() -> CompiledStateGraph:
     """创建异步工作流（核心：指定异步节点）"""
