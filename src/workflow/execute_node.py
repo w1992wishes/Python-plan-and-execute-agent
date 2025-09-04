@@ -1,10 +1,11 @@
-from src.workflow.state import AgentState
+from src.workflow.state import AgentState, format_successful_tasks
 from langchain_core.messages import AIMessage
 from langgraph.prebuilt import create_react_agent
 from src.log.logger import logger
 from src.setting.settings import Settings
 from src.workflow.agent_tools import get_all_tools
 from langchain_openai import ChatOpenAI
+from src.utils.json_util import extract_json_safely
 
 def create_execute_agent() -> callable:
     """创建异步ReAct Agent（使用异步工具）"""
@@ -37,26 +38,32 @@ def create_execute_agent() -> callable:
     return create_react_agent(model=llm, tools=tools, prompt=system_prompt)
 
 # 异步执行节点
-async def action_executor_node(state: AgentState) -> AgentState:
-    current_plan = state.current_plan
-    if not current_plan:
-        error_msg = "无有效计划可执行"
-        state.add_message(AIMessage(content=f"❌ {error_msg}"))
-        state.need_replan = True
-        return state
+async def execute(state: AgentState):
+    current_task = state.get("current_task", None)
+    if not current_task:
+        error_msg = "无有效任务可执行"
+        return {
+            "need_replan": True,
+            "message": [AIMessage(content=f"❌ {error_msg}")],
+        }
 
-    # 提取第一个步骤的描述（plan 是 Step 列表，需通过 .description 获取任务内容）
-    current_step = current_plan.steps[0]
-    plan_str = "\n".join(f"{step.id}. {step.description}" for step in current_plan.steps)
+    logger.info(
+        f"[执行节点] 开始执行任务：{current_task.description} | {current_task.tool}"
+    )
 
+    task_results = state.get("format_successful_tasks", "")
     # 构造 agent 任务（明确要执行的步骤）
     task_formatted = f"""
-        你的任务是执行以下计划的第 {current_step.id} 步：
-        完整计划：
-        {plan_str}
-
-        当前需执行的步骤：{current_step.description}
-        请执行该步骤（例如：调用工具查询信息），并返回执行结果（无需格式，直接文字描述）。
+        你的任务是调用工具执行以下任务：
+        当前需执行的步骤：{current_task.description}
+        已有的信息：{task_results}
+        请执行该步骤（例如：调用工具查询信息），并返回执行结果，用json输出。
+        
+        {{
+            "result": "工具执行结果（如查询到的数值、计算结果等）"
+            "status": "success/failed",  # 执行状态
+            "error_message": "若失败，简要说明失败原因（如无则为空）"
+        }}
         """
 
     # 调用 agent 执行步骤（确保 agent_executor 接受 {"messages": [...]}）
@@ -65,10 +72,15 @@ async def action_executor_node(state: AgentState) -> AgentState:
     )
 
     # 更新状态（使用封装方法）
-    result = step_result["messages"][-1].content
-    state.add_executed_step(current_step, result)
-    state.add_message(AIMessage(
-        content=f"📌 步骤{current_step.id}执行结果：{result}..."
-    ))
-    logger.info(f"[执行节点] 步骤完成 | ID：{current_step.id}")
-    return state
+    result = extract_json_safely(step_result["messages"][-1].content)
+    logger.info(f"[执行节点] 步骤完成 | 任务 {current_task.description} ：结果： {str(result)}")
+    return {
+        "messages": [AIMessage(content=f"✅ 步骤执行完成！\n任务：{current_task.description}\n结果预览：{str(result)[:100]}...")],
+        "executed_tasks": [{
+            "description": current_task.description,
+            "tool_used": current_task.tool,
+            "result": result.get("result", ""),
+            "status": result.get("status", "failed"),
+            "error_message": result.get("error_message", "")
+        }]
+    }

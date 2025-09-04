@@ -2,7 +2,7 @@ from src.model.plan import Plan
 from src.workflow.state import AgentState
 from langchain_core.messages import AIMessage
 from src.log.logger import logger
-from src.setting.prompt_setting import get_planning_system_prompt, create_planning_prompt
+from src.setting.prompt_setting import get_planning_system_prompt
 from src.workflow.plan_utils import BasePlanGenerator
 
 
@@ -14,11 +14,11 @@ class TaskPlanGenerator(BasePlanGenerator):
         self.tools = get_all_tools()
         self.tools_str = "\n".join([f"- {t.name}：{t.description}" for t in self.tools])
 
-    async def generate_async(self, system_prompt: str, user_prompt: str, query: str) -> Plan:
+    async def generate_async(self, system_prompt: str, query: str) -> Plan:
         """异步计划生成入口（适配异步工作流，核心：LLM异步调用）"""
         try:
             # 1. 构建LLM输入消息
-            messages = self._build_llm_messages(system_prompt, user_prompt)
+            messages = self._build_llm_messages(system_prompt, query)
             logger.debug(f"[异步计划生成器] 调用LLM，消息数：{len(messages)}，查询预览：{query[:30]}...")
 
             # 2. 异步调用LLM（关键：替换invoke为ainvoke）
@@ -37,24 +37,34 @@ class TaskPlanGenerator(BasePlanGenerator):
 
     async def generate_initial_plan(self, state: AgentState) -> Plan:
         """异步生成初始计划"""
-        query = state.input
-        intent_type = state.intent_type
-        user_prompt = create_planning_prompt(query=query, tools_str=self.tools_str)
-        system_prompt = get_planning_system_prompt(intent_type=intent_type)
+        query = state.get("input")
+        intent_type = state.get("intent_type")
+        system_prompt = get_planning_system_prompt(
+            query=query,
+            intent_type=intent_type,
+            tools_str=self.tools_str,
+            context={}
+        )
         # 异步调用生成计划
-        plan = await self.generate_async(system_prompt, user_prompt, query)  # 关键：await
+        plan = await self.generate_async(system_prompt, query)  # 关键：await
         return plan
 
-# 异步规划节点
-async def task_planner_node(state: AgentState) -> AgentState:
-    logger.info(f"[规划节点] 启动 | 查询：{state.input[:50]}... | 意图：{state.intent_type}")
-    generator = TaskPlanGenerator()
-    initial_plan = await generator.generate_initial_plan(state)  # 异步调用
-    # 状态更新（纯类属性访问）
-    state.set_current_plan(initial_plan)
-    state.add_message(AIMessage(
-        content=f"✅ 初始计划生成完成！\n计划ID：{initial_plan.id}\n步骤数：{len(initial_plan.steps)}"
-    ))
-    logger.info(f"[规划节点] 完成 | 步骤数：{len(initial_plan.steps)}")
-    return state
 
+# 异步规划节点
+async def plan(state: AgentState):
+    logger.info(f"[规划节点] 启动 | 查询：{state.get("input")} | 意图：{state.get("intent_type")}")
+    generator = TaskPlanGenerator()
+    initial_plan = await generator.generate_initial_plan(state)
+
+    # 新增：输出步骤数和每个步骤的并行任务数
+    task_count = sum(len(step.step_tasks) for step in initial_plan.steps)
+
+    logger.info(f"[规划节点] 生成计划 | 步骤数：{len(initial_plan.steps)} | 并行任务总数：{task_count}")
+
+    return {
+        "current_plan": initial_plan,
+        "plan_history": [initial_plan],
+        "messages": [AIMessage(
+            content=f"✅ 初始计划生成完成！\n计划ID：{initial_plan.id}\n步骤数：{len(initial_plan.steps)}\n并行任务总数：{task_count}"
+        )]
+    }

@@ -32,11 +32,8 @@ class MultiStepAgent:
         核心：通过graph.astream()获取异步事件，按指定格式输出
         """
         # 1. 初始化AgentState（纯类对象，与异步工作流兼容）
-        initial_state = AgentState(
-            input=query,
-            messages=[HumanMessage(content=query)],  # 初始化用户消息
-            intent_type="SIMPLE_QUERY"
-        )
+        initial_state = {"input": query}
+
         logger.info(f"📥 接收查询：{query[:50]}...")
 
         final_response = "无回复"  # 默认最终回复
@@ -61,22 +58,30 @@ class MultiStepAgent:
                 print("\n" + "="*50)
                 print(f"=== 节点 {node_name} 执行结果 ===")
 
-                # 👇 按用户要求格式打印关键信息（字段映射：AgentState → 输出格式）
-                # 1. 打印更新后的计划（对应AgentState.current_plan）
+                # 👇 按三层结构调整打印逻辑（适配Plan→PlanStep→StepTask层级）
                 if "current_plan" in node_output and node_output.get("current_plan"):
                     plan = node_output.get("current_plan")
                     print("更新后的计划：")
-                    print(f"  计划ID：{plan.id[:12]}... | 目标：{plan.goal[:30]}...")
-                    print("  步骤列表：")
-                    for idx, step in enumerate(plan.steps, 1):
-                        print(f"    {idx}. 工具：{step.tool or '无'} | 描述：{step.description[:40]}...")
+                    print(f"  计划ID：{plan.id[:12]}... | 目标：{plan.goal[:30]}... | 总步骤数：{len(plan.steps)}")
+                    print("  步骤与并行任务列表：")
+
+                    for step_idx, step in enumerate(plan.steps, 1):
+                        # 打印步骤基本信息（含依赖关系）
+                        print(f"    步骤 {step_idx}（ID：{step.id}）：")
+                        print(f"      描述：{step.description} | 置信度：{step.confidence:.2f}")
+                        print(f"      并行任务（共{len(step.step_tasks)}个）：")
+
+                        # 打印当前步骤下的所有并行任务
+                        for task_idx, task in enumerate(step.step_tasks, 1):
+                            print(f"        任务 {task_idx}（工具：{task.tool or '无'}）：")
+                            print(f"          描述：{task.description}")
 
                 # 2. 打印已完成步骤（对应AgentState.executed_steps）
-                if "executed_steps" in node_output and node_output.get("executed_steps"):
+                if "executed_tasks" in node_output and node_output.get("executed_tasks"):
                     # 取最后一个已完成步骤
-                    last_step = node_output.get("executed_steps")[-1]
-                    task = f"步骤{last_step['step_id']}-{last_step['description']}（工具：{last_step['tool_used'] or '无'}）"
-                    result = last_step['result']
+                    last_task = node_output.get("executed_tasks")[-1]
+                    task = f"任务{last_task['description']}（工具：{last_task['tool_used'] or '无'}）"
+                    result = last_task['result']
                     print(f"已完成步骤：{task}")
                     print(f"步骤结果：{result[:100]}..." if len(str(result)) > 100 else f"步骤结果：{result}")
 

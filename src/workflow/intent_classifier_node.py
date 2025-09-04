@@ -27,7 +27,7 @@ class IntentClassifierAgent:
 1. 严格按以下3种类型分类，不新增其他类型：
    - SIMPLE_QUERY：指标简单查数（如"2024年1月营收是多少"）
    - COMPARISON：指标对比（如"2024年1月与2月营收差异"）
-   - ROOT_CAUSE_ANALYSIS：指标根因分析（如"为什么2024年1月营收下降"）
+   - ANALYSIS：指标根因分析（如"为什么2024年1月营收下降"）
 2. 必须返回纯JSON格式，无任何前置解释、后置说明或代码块包裹
 3. 置信度需客观评估（明确场景0.8+，模糊场景0.5-0.7）
 4. 必须包含"intent_type"（英文类型）、"chinese_label"（中文标签）、"confidence"（0-1浮点数）、"reason"（分类依据）"""
@@ -40,7 +40,7 @@ class IntentClassifierAgent:
 
 ### 输出格式（必须严格遵守）
 {{
-  "intent_type": "SIMPLE_QUERY/COMPARISON/ROOT_CAUSE_ANALYSIS",
+  "intent_type": "SIMPLE_QUERY/COMPARISON/ANALYSIS",
   "chinese_label": "指标简单查数/指标对比/指标根因分析",
   "confidence": 0.9,
   "reason": "1-2句话说明分类依据"
@@ -72,7 +72,7 @@ class IntentClassifierAgent:
                 raise ValueError(f"缺失必要字段：{','.join(missing_fields)}")
 
             # 5. 校验意图类型有效性（仅允许3种指定类型）
-            valid_intent_types = ["SIMPLE_QUERY", "COMPARISON", "ROOT_CAUSE_ANALYSIS"]
+            valid_intent_types = ["SIMPLE_QUERY", "COMPARISON", "ANALYSIS"]
             if result["intent_type"] not in valid_intent_types:
                 raise ValueError(f"无效意图类型：{result['intent_type']}，允许值：{valid_intent_types}")
 
@@ -85,7 +85,7 @@ class IntentClassifierAgent:
             intent_label_map = {
                 "SIMPLE_QUERY": "指标简单查数",
                 "COMPARISON": "指标对比",
-                "ROOT_CAUSE_ANALYSIS": "指标根因分析"
+                "ANALYSIS": "指标根因分析"
             }
             expected_label = intent_label_map[result["intent_type"]]
             if result["chinese_label"] != expected_label:
@@ -112,13 +112,13 @@ class IntentClassifierAgent:
             }
 
 
-def intent_classifier_node(state: AgentState) -> AgentState:
+def intent_classifier(state: AgentState):
     """LangGraph意图分类节点（适配纯类AgentState，修复潜在问题）"""
-    logger.info(f"[意图分类节点] 启动 | 用户查询：{state.input[:50]}...")
+    logger.info(f"[意图分类节点] 启动 | 用户查询：{state.get("input")[:50]}...")
 
     try:
         # 1. 校验输入有效性（避免空查询）
-        user_query = state.input
+        user_query = state.get("input")
         if not user_query:
             raise ValueError("用户查询为空，无法分类")
 
@@ -128,7 +128,7 @@ def intent_classifier_node(state: AgentState) -> AgentState:
 
         # 3. 更新AgentState（纯类属性操作，修复原代码问题）
         # 修复：原代码调用的set_intent_type方法在AgentState中可能未定义，直接赋值并校验
-        valid_intent_types = ["SIMPLE_QUERY", "COMPARISON", "ROOT_CAUSE_ANALYSIS"]
+        valid_intent_types = ["SIMPLE_QUERY", "COMPARISON", "ANALYSIS"]
         if classify_result["intent_type"] in valid_intent_types:
             state.intent_type = classify_result["intent_type"]  # 直接赋值（纯类属性）
         else:
@@ -139,25 +139,24 @@ def intent_classifier_node(state: AgentState) -> AgentState:
         state.need_attention = "error" in classify_result  # 标记是否需要关注
         state.last_error = classify_result.get("error", "")  # 记录错误（若有）
 
-        # 添加消息（使用纯类属性的列表操作，避免原代码的add_message方法依赖）
-        # 修复：若AgentState未定义add_message方法，直接操作messages列表
-        state.messages.append(
-            AIMessage(
+        logger.info(f"[意图分类节点] 完成 | 最终意图类型：{state.intent_type}")
+        return {
+            "intent_type": state.intent_type,
+            "intent_info": state.intent_info,
+            "messages": [AIMessage(
                 content=f"🔍 意图分类完成！\n- 意图类型：{classify_result['chinese_label']}（{classify_result['intent_type']}）\n- 置信度：{classify_result['confidence']}\n- 分类依据：{classify_result['reason'][:80]}..."
-            )
-        )
+            )],
+            "need_attention": state.need_attention,
+            "last_error": state.last_error
+        }
 
     except Exception as e:
         error_msg = f"意图分类节点异常：{str(e)}"
-        logger.error(error_msg, exc_info=True)
-        # 错误时更新状态（确保流程不中断）
-        state.last_error = error_msg
-        state.need_attention = True
-        state.messages.append(
-            AIMessage(content=f"❌ {error_msg}，已自动降级为「指标简单查数」意图")
-        )
-        state.intent_type = "SIMPLE_QUERY"  # 强制降级为默认意图
+        return {
+            "intent_type": "SIMPLE_QUERY",
+            "messages": [AIMessage(content=f"❌ {error_msg}，已自动降级为「指标简单查数」意图")],
+            "need_attention": True,
+            "last_error": error_msg
+        }
 
-    # 4. 返回修改后的纯类AgentState（必须返回原实例）
-    logger.info(f"[意图分类节点] 完成 | 最终意图类型：{state.intent_type}")
-    return state
+

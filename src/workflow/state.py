@@ -1,87 +1,49 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
-from src.model.plan import Plan, PlanStep
+from typing import List, Dict, Any, Optional, Annotated, TypedDict
+from src.model.plan import Plan, StepTask
+import operator
 
 @dataclass
-class AgentState:
+class AgentState(TypedDict):
     """
     终极版Agent状态：纯类对象（非字典子类）
     所有属性通过实例.属性访问，彻底杜绝字典与类的混淆
     """
-    # ------------------------------
-    # 核心必填属性（带默认值，无需手动初始化）
-    # ------------------------------
-    input: str = ""  # 用户输入的原始查询（核心字段）
-    intent_type: str = "SIMPLE_QUERY"  # 意图类型（英文，如SIMPLE_QUERY）
-    intent_info: Dict[str, Any] = field(default_factory=dict)  # 完整意图结果（含中文标签、置信度）
-    current_plan: Optional[Plan] = None  # 当前生效的计划（Plan对象或None）
-    plan_history: List[Plan] = field(default_factory=list)  # 历史计划列表
-    executed_steps: List[Dict[str, Any]] = field(default_factory=list)  # 已执行步骤记录
-    need_replan: bool = False  # 是否需要重规划（布尔值）
-    task_completed: bool = False  # 任务是否完成（布尔值）
-    last_error: str = ""  # 上一次执行错误信息
-    need_attention: bool = False  # 是否需要人工关注
-    messages: List[Any] = field(default_factory=list)  # 交互消息列表（LangChain Message对象）
-    context: Dict[str, Any] = field(default_factory=dict)  # 额外上下文（如用户历史对话）
+    messages: Annotated[List[Any], operator.add]
 
-    # ------------------------------
-    # 属性操作方法（封装逻辑，避免直接修改）
-    # ------------------------------
-    def set_input(self, value: str) -> None:
-        """设置用户查询（自动校验类型和去重）"""
-        if not isinstance(value, str):
-            raise TypeError(f"input必须是字符串类型，当前：{type(value).__name__}")
-        self.input = value.strip()  # 自动去除前后空格
+    plan_history: Annotated[List[Plan], operator.add]
 
-    def set_intent_type(self, intent_name: str) -> None:
-        """设置意图类型（仅允许指定枚举值）"""
-        valid_intents = ["SIMPLE_QUERY", "COMPARISON", "ROOT_CAUSE_ANALYSIS"]
-        if intent_name not in valid_intents:
-            raise ValueError(f"intent_type必须是{valid_intents}之一，当前：{intent_name}")
-        self.intent_type = intent_name
+    executed_tasks: Annotated[List[Dict[str, Any]], operator.add]  # 已执行步骤记录
+    current_task: StepTask
 
-    def add_executed_step(self, step: PlanStep, result: str) -> None:
-        """添加已执行步骤记录（自动格式化，避免手动构造字典）"""
-        if not isinstance(step, PlanStep):
-            raise TypeError(f"step必须是PlanStep对象，当前：{type(step).__name__}")
-        self.executed_steps.append({
-            "step_id": step.id,
-            "description": step.description,
-            "tool_used": step.tool,
-            "result": result
-        })
-        # 执行后自动标记需要重规划
-        self.need_replan = True
+    input: str  # 用户输入的原始查询（核心字段）
+    intent_type: str  # 意图类型（英文，如SIMPLE_QUERY）
+    intent_info: Dict[str, Any]  # 完整意图结果（含中文标签、置信度）
 
-    def add_message(self, message: Any) -> None:
-        """添加交互消息（确保是LangChain Message对象）"""
-        from langchain_core.messages import BaseMessage
-        if isinstance(message, BaseMessage) or hasattr(message, "content"):
-            self.messages.append(message)
-        else:
-            raise TypeError(f"message必须是LangChain Message对象，当前：{type(message).__name__}")
+    current_plan: Optional[Plan]  # 当前生效的计划（Plan对象或None）
 
-    def set_current_plan(self, plan: Plan) -> None:
-        """设置当前计划（自动更新历史和时间戳）"""
-        if not isinstance(plan, Plan):
-            raise TypeError(f"plan必须是Plan对象，当前：{type(plan).__name__}")
-        # 添加到历史计划
-        if self.current_plan:
-            self.plan_history.append(self.current_plan)
-        # 设置新计划
-        self.current_plan = plan
+    need_replan: bool  # 是否需要重规划（布尔值）
+    task_completed: bool  # 任务是否完成（布尔值）
+    last_error: str  # 上一次执行错误信息
+    need_attention: bool   # 是否需要人工关注
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（用于序列化或日志）"""
-        return {
-            "input": self.input,
-            "intent_type": self.intent_type,
-            "intent_info": self.intent_info,
-            "current_plan_id": self.current_plan.id if self.current_plan else None,
-            "plan_history_count": len(self.plan_history),
-            "executed_steps_count": len(self.executed_steps),
-            "need_replan": self.need_replan,
-            "task_completed": self.task_completed,
-            "last_error": self.last_error,
-            "message_count": len(self.messages)
-        }
+def format_successful_tasks(state) -> str:
+    executed_tasks = state.get("executed_tasks", [])
+    seen_task_names = set()
+    unique_successful = []
+
+    for task in executed_tasks:
+        if task.get("status") == "success":
+            task_name = task.get("description", "未知任务")
+            if task_name not in seen_task_names:
+                seen_task_names.add(task_name)
+                unique_successful.append({
+                    "name": task_name,
+                    "result": task.get("result", "无结果")
+                })
+
+    # 2. 格式化为"任务名，任务结果"的字符串（每行一个）
+    return "\n".join([
+        f"{task['name']}，{task['result']}"
+        for task in unique_successful
+    ])
